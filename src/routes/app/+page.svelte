@@ -2,8 +2,9 @@
 	import { Button, TextField } from 'svelte-fluentui';
 	import { auth } from '$lib/stores/auth.svelte';
 	import { goto } from '$app/navigation';
-	import { getChats, type ChatDetail, type Message } from '$lib/api/chats';
+	import { getChats, createChat, type ChatDetail, type ChatMember, type Message } from '$lib/api/chats';
 	import { getMessages, sendMessageRest } from '$lib/api/messages';
+	import { getUsers } from '$lib/api/users';
 	import { connectWS, sendWS, disconnectWS } from '$lib/api/ws';
 
 	$effect(() => {
@@ -17,7 +18,106 @@
 	let loadingMessages = $state(false);
 	let messagesEl = $state<HTMLElement | null>(null);
 
+	// User search / new chat panel
+	let panelMode = $state<'none' | 'dm' | 'group'>('none');
+	let userQuery = $state('');
+	let allUsers = $state<ChatMember[]>([]);
+	let usersLoading = $state(false);
+
+	// Group creation
+	let groupName = $state('');
+	let groupSelected = $state<ChatMember[]>([]);
+
 	const selectedChat = $derived(chats.find((c) => c.id === selectedChatId) ?? null);
+
+	const filteredUsers = $derived.by(() => {
+		const q = userQuery.trim().toLowerCase();
+		return allUsers.filter((u) => {
+			if (u.id === auth.userId) return false;
+			if (!q) return true;
+			return (
+				u.username.toLowerCase().includes(q) ||
+				(u.display_name ?? '').toLowerCase().includes(q)
+			);
+		});
+	});
+
+	async function refreshChats() {
+		if (!auth.token) return;
+		chats = (await getChats(auth.token)) ?? [];
+	}
+
+	function loadUsers() {
+		if (allUsers.length === 0 && auth.token) {
+			usersLoading = true;
+			getUsers(auth.token)
+				.then((data) => {
+					allUsers = data ?? [];
+				})
+				.finally(() => {
+					usersLoading = false;
+				});
+		}
+	}
+
+	function openDM() {
+		panelMode = 'dm';
+		loadUsers();
+	}
+
+	function openGroup() {
+		panelMode = 'group';
+		loadUsers();
+	}
+
+	function closePanel() {
+		panelMode = 'none';
+		userQuery = '';
+		groupName = '';
+		groupSelected = [];
+	}
+
+	async function startDM(user: ChatMember) {
+		const existing = chats.find(
+			(c) => c.type === 'direct' && c.members.some((m) => m.id === user.id)
+		);
+		if (existing) {
+			closePanel();
+			selectChat(existing.id);
+			return;
+		}
+
+		if (!auth.token || auth.userId === null) return;
+		const chatId = await createChat(auth.token, user.username, 'direct', [
+			auth.userId,
+			user.id
+		]);
+		await refreshChats();
+		closePanel();
+		selectChat(chatId);
+	}
+
+	function isSelected(user: ChatMember): boolean {
+		return groupSelected.some((u) => u.id === user.id);
+	}
+
+	function toggleUser(user: ChatMember) {
+		if (isSelected(user)) {
+			groupSelected = groupSelected.filter((u) => u.id !== user.id);
+		} else {
+			groupSelected = [...groupSelected, user];
+		}
+	}
+
+	async function createGroup() {
+		const name = groupName.trim();
+		if (!name || groupSelected.length === 0 || !auth.token || auth.userId === null) return;
+		const ids = [auth.userId, ...groupSelected.map((u) => u.id)];
+		const chatId = await createChat(auth.token, name, 'group', ids);
+		await refreshChats();
+		closePanel();
+		selectChat(chatId);
+	}
 
 	$effect(() => {
 		const token = auth.token;
@@ -155,7 +255,41 @@
 		<aside class="sidebar">
 			<div class="sidebar-top">
 				<span class="logo">WindAster</span>
-				<button class="logout-btn" onclick={handleLogout} title="Sign out">
+				<div class="top-actions">
+					<button class="icon-btn" onclick={openDM} title="New chat">
+						<svg
+							width="18"
+							height="18"
+							viewBox="0 0 16 16"
+							fill="none"
+							xmlns="http://www.w3.org/2000/svg"
+						>
+							<path
+								d="M8 3.5v9M3.5 8h9"
+								stroke="currentColor"
+								stroke-width="1.5"
+								stroke-linecap="round"
+							/>
+						</svg>
+					</button>
+					<button class="icon-btn" onclick={openGroup} title="New group">
+						<svg
+							width="18"
+							height="18"
+							viewBox="0 0 16 16"
+							fill="none"
+							xmlns="http://www.w3.org/2000/svg"
+						>
+							<path
+								d="M10.5 8a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5ZM13.5 13v-.5a2.5 2.5 0 0 0-2.5-2.5h-1M5.5 8.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM2 13.5V13a2.5 2.5 0 0 1 2.5-2.5h2A2.5 2.5 0 0 1 9 13v.5"
+								stroke="currentColor"
+								stroke-width="1.3"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+							/>
+						</svg>
+					</button>
+					<button class="icon-btn" onclick={handleLogout} title="Sign out">
 					<svg
 						width="16"
 						height="16"
@@ -171,7 +305,8 @@
 							stroke-linejoin="round"
 						/>
 					</svg>
-				</button>
+					</button>
+				</div>
 			</div>
 
 			<div class="user-row">
@@ -184,31 +319,109 @@
 				<span class="user-name">{auth.user?.username || 'Me'}</span>
 			</div>
 
-			<div class="chat-list">
-				{#if chats.length === 0}
-					<p class="empty-chats">No conversations yet</p>
-				{:else}
-					{#each chats as chat (chat.id)}
-						{@const name = getChatName(chat)}
-						<button
-							class="chat-item"
-							class:active={chat.id === selectedChatId}
-							onclick={() => selectChat(chat.id)}
-						>
-							<div class="chat-avatar" style="background: {getAvatarColor(name)}">
-								{name.charAt(0).toUpperCase()}
+			{#if panelMode !== 'none'}
+				<div class="search-bar">
+					<!-- svelte-ignore a11y_autofocus -->
+					<input
+						class="search-input"
+						type="text"
+						placeholder="Search users…"
+						bind:value={userQuery}
+						autofocus
+					/>
+					<button class="back-btn" onclick={closePanel}>Back</button>
+				</div>
+
+				{#if panelMode === 'group'}
+					<div class="group-setup">
+						<input
+							class="search-input"
+							type="text"
+							placeholder="Group name…"
+							bind:value={groupName}
+						/>
+						{#if groupSelected.length > 0}
+							<div class="chips">
+								{#each groupSelected as user (user.id)}
+									{@const label = user.display_name || user.username}
+									<button class="chip" onclick={() => toggleUser(user)}>
+										{label}<span class="chip-x">×</span>
+									</button>
+								{/each}
 							</div>
-							<div class="chat-info">
-								<div class="chat-item-row">
-									<span class="chat-name">{name}</span>
-									<span class="chat-time">{getLastTime(chat)}</span>
-								</div>
-								<span class="chat-preview">{getLastPreview(chat)}</span>
-							</div>
-						</button>
-					{/each}
+						{/if}
+					</div>
 				{/if}
-			</div>
+
+				<div class="chat-list">
+					{#if usersLoading}
+						<p class="empty-chats">Loading users…</p>
+					{:else if filteredUsers.length === 0}
+						<p class="empty-chats">No users found</p>
+					{:else}
+						{#each filteredUsers as user (user.id)}
+							{@const label = user.display_name || user.username}
+							<button
+								class="chat-item"
+								class:selected={panelMode === 'group' && isSelected(user)}
+								onclick={() => (panelMode === 'group' ? toggleUser(user) : startDM(user))}
+							>
+								<div class="chat-avatar" style="background: {getAvatarColor(label)}">
+									{label.charAt(0).toUpperCase()}
+								</div>
+								<div class="chat-info">
+									<div class="chat-item-row">
+										<span class="chat-name">{label}</span>
+									</div>
+									<span class="chat-preview">@{user.username}</span>
+								</div>
+								{#if panelMode === 'group' && isSelected(user)}
+									<span class="check">✓</span>
+								{/if}
+							</button>
+						{/each}
+					{/if}
+				</div>
+
+				{#if panelMode === 'group'}
+					<div class="group-footer">
+						<Button
+							appearance="accent"
+							onclick={createGroup}
+							disabled={!groupName.trim() || groupSelected.length === 0}
+							style="width: 100%"
+						>
+							Create group
+						</Button>
+					</div>
+				{/if}
+			{:else}
+				<div class="chat-list">
+					{#if chats.length === 0}
+						<p class="empty-chats">No conversations yet</p>
+					{:else}
+						{#each chats as chat (chat.id)}
+							{@const name = getChatName(chat)}
+							<button
+								class="chat-item"
+								class:active={chat.id === selectedChatId}
+								onclick={() => selectChat(chat.id)}
+							>
+								<div class="chat-avatar" style="background: {getAvatarColor(name)}">
+									{name.charAt(0).toUpperCase()}
+								</div>
+								<div class="chat-info">
+									<div class="chat-item-row">
+										<span class="chat-name">{name}</span>
+										<span class="chat-time">{getLastTime(chat)}</span>
+									</div>
+									<span class="chat-preview">{getLastPreview(chat)}</span>
+								</div>
+							</button>
+						{/each}
+					{/if}
+				</div>
+			{/if}
 		</aside>
 
 		<!-- Chat panel -->
@@ -358,7 +571,13 @@
 		color: #3eb489;
 	}
 
-	.logout-btn {
+	.top-actions {
+		display: flex;
+		align-items: center;
+		gap: 2px;
+	}
+
+	.icon-btn {
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -373,18 +592,145 @@
 		padding: 0;
 	}
 
-	.logout-btn:hover {
+	.icon-btn:hover {
 		background: rgba(0, 0, 0, 0.07);
 		color: rgba(0, 0, 0, 0.8);
 	}
 
 	@media (prefers-color-scheme: dark) {
-		.logout-btn {
+		.icon-btn {
 			color: rgba(255, 255, 255, 0.4);
 		}
-		.logout-btn:hover {
+		.icon-btn:hover {
 			background: rgba(255, 255, 255, 0.07);
 			color: rgba(255, 255, 255, 0.85);
+		}
+	}
+
+	.search-bar {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 4px 12px 10px;
+	}
+
+	.search-input {
+		flex: 1;
+		min-width: 0;
+		height: 32px;
+		padding: 0 12px;
+		border-radius: 8px;
+		border: 1px solid rgba(0, 0, 0, 0.12);
+		background: #ffffff;
+		font-size: 13px;
+		color: #1f1f1f;
+		outline: none;
+		transition: border-color 0.15s;
+	}
+
+	.search-input:focus {
+		border-color: #3eb489;
+	}
+
+	.search-input::placeholder {
+		color: rgba(0, 0, 0, 0.4);
+	}
+
+	.back-btn {
+		border: none;
+		background: none;
+		cursor: pointer;
+		font-size: 13px;
+		color: #3eb489;
+		padding: 4px 6px;
+		border-radius: 6px;
+		flex-shrink: 0;
+	}
+
+	.back-btn:hover {
+		background: rgba(62, 180, 137, 0.12);
+	}
+
+	@media (prefers-color-scheme: dark) {
+		.search-input {
+			background: #23232b;
+			border-color: rgba(255, 255, 255, 0.12);
+			color: #e8e8ea;
+		}
+		.search-input::placeholder {
+			color: rgba(255, 255, 255, 0.35);
+		}
+	}
+
+	/* ── Group creation ── */
+
+	.group-setup {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		padding: 0 12px 10px;
+	}
+
+	.chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+
+	.chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		padding: 3px 8px;
+		border: none;
+		border-radius: 12px;
+		background: rgba(62, 180, 137, 0.16);
+		color: #2f8f6c;
+		font-size: 12px;
+		font-weight: 500;
+		cursor: pointer;
+	}
+
+	.chip:hover {
+		background: rgba(62, 180, 137, 0.26);
+	}
+
+	.chip-x {
+		font-size: 14px;
+		line-height: 1;
+	}
+
+	.check {
+		margin-left: auto;
+		color: #3eb489;
+		font-size: 15px;
+		font-weight: 700;
+		flex-shrink: 0;
+	}
+
+	.chat-item.selected {
+		background: rgba(62, 180, 137, 0.12);
+	}
+
+	.group-footer {
+		padding: 12px;
+		border-top: 1px solid rgba(0, 0, 0, 0.08);
+		flex-shrink: 0;
+	}
+
+	@media (prefers-color-scheme: dark) {
+		.chip {
+			background: rgba(62, 180, 137, 0.22);
+			color: #6fd3ac;
+		}
+		.chip:hover {
+			background: rgba(62, 180, 137, 0.32);
+		}
+		.chat-item.selected {
+			background: rgba(62, 180, 137, 0.18);
+		}
+		.group-footer {
+			border-top-color: rgba(255, 255, 255, 0.07);
 		}
 	}
 
