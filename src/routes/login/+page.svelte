@@ -36,6 +36,7 @@
 				bind:value={identifier}
 				required
 				autocomplete="username"
+				style="width: 100%"
 			/>
 		</Field>
 
@@ -47,6 +48,7 @@
 				bind:value={password}
 				required
 				autocomplete="current-password"
+				style="width: 100%"
 				onkeydown={(e) => e.key === 'Enter' && handleSubmit()}
 			/>
 		</Field>
@@ -55,7 +57,12 @@
 			<p class="error">{error}</p>
 		{/if}
 
-		<Button appearance="accent" onclick={handleSubmit} disabled={loading}>
+		<Button
+			appearance="accent"
+			onclick={handleSubmit}
+			disabled={loading}
+			style="width: 100%; margin-top: 4px"
+		>
 			{loading ? 'Signing in…' : 'Sign in'}
 		</Button>
 
@@ -69,6 +76,7 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		background: var(--colorNeutralBackground3, #f0f0f0);
 	}
 
 	.card {
@@ -76,23 +84,28 @@
 		flex-direction: column;
 		gap: 14px;
 		width: 100%;
-		max-width: 360px;
-		padding: 36px 32px;
-		border-radius: 8px;
-		background: var(--colorNeutralBackground2);
+		max-width: 380px;
+		padding: 40px 36px;
+		border-radius: 12px;
+		background: var(--colorNeutralBackground1, #fff);
+		box-shadow:
+			0 4px 16px rgba(0, 0, 0, 0.08),
+			0 1px 3px rgba(0, 0, 0, 0.06);
+		border: 1px solid var(--colorNeutralStroke2, rgba(0, 0, 0, 0.06));
 	}
 
 	h1 {
 		margin: 0;
-		font-size: 22px;
+		font-size: 24px;
 		font-weight: 700;
-		letter-spacing: -0.3px;
+		letter-spacing: -0.4px;
+		color: var(--fluent-accent-primary, #3eb489);
 	}
 
 	.subtitle {
 		margin: -6px 0 4px;
 		font-size: 13px;
-		color: var(--colorNeutralForeground2);
+		opacity: 0.6;
 	}
 
 	.error {
@@ -105,11 +118,11 @@
 		margin: 0;
 		text-align: center;
 		font-size: 13px;
-		color: var(--colorNeutralForeground2);
+		color: #aeafb4;
 	}
 
 	.switch a {
-		color: var(--colorBrandForeground1);
+		color: var(--fluent-accent-primary, #3eb489);
 		text-decoration: none;
 	}
 </style>

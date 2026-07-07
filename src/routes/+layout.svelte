@@ -1,12 +1,13 @@
 <script lang="ts">
 	import favicon from '$lib/assets/favicon.svg';
-	import { theme } from 'svelte-fluentui';
+	import { theme, settings } from 'svelte-fluentui';
 	import 'svelte-fluentui/styles';
 
 	let { children } = $props();
 
 	$effect(() => {
 		theme.init();
+		settings.setAccentColor('#3EB489');
 	});
 </script>
 
