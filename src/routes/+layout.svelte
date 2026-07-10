@@ -6,8 +6,13 @@
 	let { children } = $props();
 
 	$effect(() => {
-		theme.init();
 		settings.setAccentColor('#3EB489');
+
+		const mq = window.matchMedia('(prefers-color-scheme: dark)');
+		const apply = () => theme.set(mq.matches ? 'dark' : 'light');
+		apply();
+		mq.addEventListener('change', apply);
+		return () => mq.removeEventListener('change', apply);
 	});
 </script>
 
@@ -21,8 +26,8 @@
 <style>
 	:global(body) {
 		margin: 0;
-		background-color: var(--colorNeutralBackground1);
-		color: var(--colorNeutralForeground1);
+		background-color: var(--neutral-layer-1, transparent);
+		color: var(--neutral-foreground-rest, inherit);
 		font-family: var(--fontFamilyBase);
 	}
 </style>

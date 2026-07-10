@@ -17,6 +17,7 @@
 	let selectedChatId = $state<number | null>(null);
 	let messages = $state<Message[]>([]);
 	let inputText = $state('');
+	const canSend = $derived(inputText.trim().length > 0);
 	let loadingMessages = $state(false);
 	let messagesEl = $state<HTMLElement | null>(null);
 
@@ -139,17 +140,38 @@
 			chats = data ?? [];
 		});
 
-		connectWS(token, (msg) => {
-			if (msg.chat_id === selectedChatId) {
-				messages = [...messages, msg];
-				scheduleScroll();
+		connectWS(
+			token,
+			(msg) => {
+				if (msg.chat_id === selectedChatId) {
+					messages = [...messages, msg];
+					scheduleScroll();
+				}
+				if (chats.some((c) => c.id === msg.chat_id)) {
+					chats = chats.map((c) =>
+						c.id === msg.chat_id
+							? { ...c, last_messages: [...c.last_messages.slice(-4), msg] }
+							: c
+					);
+				} else {
+					// Message for a chat we aren't tracking yet (new DM/group) — pull it in.
+					refreshChats();
+				}
+			},
+			() => {
+				// Reconnected after a drop — resync anything missed while offline.
+				refreshChats();
+				if (selectedChatId !== null && auth.token) {
+					const id = selectedChatId;
+					getMessages(auth.token, id).then((data) => {
+						if (selectedChatId === id) {
+							messages = data ?? [];
+							scheduleScroll();
+						}
+					});
+				}
 			}
-			chats = chats.map((c) =>
-				c.id === msg.chat_id
-					? { ...c, last_messages: [...c.last_messages.slice(-4), msg] }
-					: c
-			);
-		});
+		);
 
 		return () => disconnectWS();
 	});
@@ -166,11 +188,15 @@
 		messages = [];
 		loadingMessages = true;
 		try {
-			if (auth.token) messages = (await getMessages(auth.token, id)) ?? [];
+			if (auth.token) {
+				const data = await getMessages(auth.token, id);
+				// Guard against a stale fetch resolving after the user switched chats.
+				if (selectedChatId === id) messages = data ?? [];
+			}
 		} finally {
-			loadingMessages = false;
+			if (selectedChatId === id) loadingMessages = false;
 		}
-		scheduleScroll();
+		if (selectedChatId === id) scheduleScroll();
 	}
 
 	async function sendMessage() {
@@ -495,7 +521,28 @@
 							}
 						}}
 					/>
-					<Button appearance="accent" onclick={sendMessage}>Send</Button>
+					<button
+						class="send-btn"
+						onclick={sendMessage}
+						disabled={!canSend}
+						title="Send"
+						aria-label="Send message"
+					>
+						<svg
+							width="18"
+							height="18"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							xmlns="http://www.w3.org/2000/svg"
+						>
+							<path d="M12 19V5" />
+							<path d="M6 11l6-6 6 6" />
+						</svg>
+					</button>
 				</div>
 			{:else}
 				<div class="empty-state">
@@ -1110,6 +1157,43 @@
 		.input-area {
 			background: #1e1e24;
 			border-top-color: rgba(255, 255, 255, 0.07);
+		}
+	}
+
+	.send-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 36px;
+		height: 36px;
+		flex-shrink: 0;
+		padding: 0;
+		border: none;
+		border-radius: 50%;
+		background: var(--fluent-accent-primary, #3eb489);
+		color: #ffffff;
+		cursor: pointer;
+		transition: background 0.15s, transform 0.1s;
+	}
+
+	.send-btn:hover:not(:disabled) {
+		background: #35a07b;
+	}
+
+	.send-btn:active:not(:disabled) {
+		transform: scale(0.93);
+	}
+
+	.send-btn:disabled {
+		background: rgba(0, 0, 0, 0.12);
+		color: rgba(0, 0, 0, 0.35);
+		cursor: default;
+	}
+
+	@media (prefers-color-scheme: dark) {
+		.send-btn:disabled {
+			background: rgba(255, 255, 255, 0.1);
+			color: rgba(255, 255, 255, 0.35);
 		}
 	}
 

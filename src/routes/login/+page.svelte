@@ -88,6 +88,7 @@
 		padding: 40px 36px;
 		border-radius: 12px;
 		background: #ffffff;
+		color: #1f1f1f;
 		box-shadow:
 			0 4px 16px rgba(0, 0, 0, 0.08),
 			0 1px 3px rgba(0, 0, 0, 0.06);
@@ -101,6 +102,7 @@
 
 		.card {
 			background: #1e1e24;
+			color: #e8e8ea;
 			border-color: rgba(255, 255, 255, 0.07);
 			box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
 		}
@@ -123,18 +125,28 @@
 	.error {
 		margin: 0;
 		font-size: 12px;
-		color: var(--colorPaletteRedForeground1);
+		color: #d13438;
 	}
 
 	.switch {
 		margin: 0;
 		text-align: center;
 		font-size: 13px;
-		color: #aeafb4;
+		color: rgba(0, 0, 0, 0.5);
 	}
 
 	.switch a {
 		color: var(--fluent-accent-primary, #3eb489);
 		text-decoration: none;
+	}
+
+	@media (prefers-color-scheme: dark) {
+		.error {
+			color: #ff8a90;
+		}
+
+		.switch {
+			color: rgba(255, 255, 255, 0.5);
+		}
 	}
 </style>
