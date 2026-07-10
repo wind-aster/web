@@ -11,6 +11,8 @@
 		if (!auth.isAuthenticated) goto('/login', { replaceState: true });
 	});
 
+	const SYSTEM_USER_ID = 0;
+
 	let chats = $state<ChatDetail[]>([]);
 	let selectedChatId = $state<number | null>(null);
 	let messages = $state<Message[]>([]);
@@ -30,9 +32,19 @@
 
 	const selectedChat = $derived(chats.find((c) => c.id === selectedChatId) ?? null);
 
+	function lastActivity(chat: ChatDetail): number {
+		const last = chat.last_messages.at(-1);
+		return last ? new Date(last.created_at).getTime() : 0;
+	}
+
+	const sortedChats = $derived.by(() =>
+		[...chats].sort((a, b) => lastActivity(b) - lastActivity(a) || b.id - a.id)
+	);
+
 	const filteredUsers = $derived.by(() => {
 		const q = userQuery.trim().toLowerCase();
 		return allUsers.filter((u) => {
+			if (u.id === SYSTEM_USER_ID) return false;
 			if (u.id === auth.userId) return false;
 			if (!q) return true;
 			return (
@@ -176,16 +188,19 @@
 		try {
 			const res = await sendMessageRest(auth.token, selectedChatId, text);
 			inputText = '';
-			messages = [
-				...messages,
-				{
-					id: res.message_id,
-					sender_id: auth.userId ?? 0,
-					chat_id: selectedChatId,
-					text,
-					created_at: res.created_at
-				}
-			];
+			const sentMsg: Message = {
+				id: res.message_id,
+				sender_id: auth.userId ?? 0,
+				chat_id: selectedChatId,
+				text,
+				created_at: res.created_at
+			};
+			messages = [...messages, sentMsg];
+			chats = chats.map((c) =>
+				c.id === selectedChatId
+					? { ...c, last_messages: [...c.last_messages.slice(-4), sentMsg] }
+					: c
+			);
 			scheduleScroll();
 		} catch (e) {
 			console.error('Send failed', e);
@@ -241,6 +256,10 @@
 
 	function isMine(msg: Message): boolean {
 		return msg.sender_id === auth.userId;
+	}
+
+	function isSystem(msg: Message): boolean {
+		return msg.sender_id === SYSTEM_USER_ID;
 	}
 
 	function handleLogout() {
@@ -400,7 +419,7 @@
 					{#if chats.length === 0}
 						<p class="empty-chats">No conversations yet</p>
 					{:else}
-						{#each chats as chat (chat.id)}
+						{#each sortedChats as chat (chat.id)}
 							{@const name = getChatName(chat)}
 							<button
 								class="chat-item"
@@ -450,12 +469,16 @@
 						<p class="loading-msg">No messages yet. Say hello!</p>
 					{:else}
 						{#each messages as msg (msg.id)}
-							<div class="message-row" class:mine={isMine(msg)}>
-								<div class="bubble" class:bubble-mine={isMine(msg)}>
-									<span class="bubble-text">{msg.text}</span>
-									<span class="bubble-time">{formatTime(msg.created_at)}</span>
+							{#if isSystem(msg)}
+								<div class="system-notice">{msg.text}</div>
+							{:else}
+								<div class="message-row" class:mine={isMine(msg)}>
+									<div class="bubble" class:bubble-mine={isMine(msg)}>
+										<span class="bubble-text">{msg.text}</span>
+										<span class="bubble-time">{formatTime(msg.created_at)}</span>
+									</div>
 								</div>
-							</div>
+							{/if}
 						{/each}
 					{/if}
 				</div>
@@ -990,6 +1013,26 @@
 	@media (prefers-color-scheme: dark) {
 		.loading-msg {
 			color: rgba(255, 255, 255, 0.35);
+		}
+	}
+
+	.system-notice {
+		align-self: center;
+		max-width: 80%;
+		margin: 4px 0;
+		padding: 4px 12px;
+		border-radius: 12px;
+		background: rgba(0, 0, 0, 0.06);
+		color: rgba(0, 0, 0, 0.5);
+		font-size: 12px;
+		text-align: center;
+		word-break: break-word;
+	}
+
+	@media (prefers-color-scheme: dark) {
+		.system-notice {
+			background: rgba(255, 255, 255, 0.07);
+			color: rgba(255, 255, 255, 0.5);
 		}
 	}
 
