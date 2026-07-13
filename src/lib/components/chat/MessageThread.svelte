@@ -3,6 +3,7 @@
 	import { chat } from '$lib/stores/chat.svelte';
 	import { SYSTEM_USER_ID } from '$lib/constants';
 	import { formatTime } from '$lib/utils/format';
+	import { getAvatarColor } from '$lib/utils/avatar';
 	import type { Message } from '$lib/api/chats';
 
 	let el = $state<HTMLElement | null>(null);
@@ -13,6 +14,21 @@
 
 	function isSystem(msg: Message): boolean {
 		return msg.sender_id === SYSTEM_USER_ID;
+	}
+
+	function senderName(msg: Message): string {
+		const m = chat.selectedChat?.members.find((mm) => mm.id === msg.sender_id);
+		return m?.display_name || m?.username || 'Unknown';
+	}
+
+	// Show a sender label only in group chats, on incoming bubbles, and only on the
+	// first message of a consecutive run from the same sender (a preceding system
+	// message has a different sender_id, so the tag reappears after a system notice).
+	function showSenderTag(msg: Message, index: number): boolean {
+		if (chat.selectedChat?.type !== 'group') return false;
+		if (isMine(msg) || isSystem(msg)) return false;
+		const prev = chat.messages[index - 1];
+		return !prev || prev.sender_id !== msg.sender_id;
 	}
 
 	// Auto-scroll to the bottom whenever the message list changes (new message,
@@ -29,12 +45,17 @@
 	{:else if chat.messages.length === 0}
 		<p class="loading-msg">No messages yet. Say hello!</p>
 	{:else}
-		{#each chat.messages as msg (msg.id)}
+		{#each chat.messages as msg, i (msg.id)}
 			{#if isSystem(msg)}
 				<div class="system-notice">{msg.text}</div>
 			{:else}
 				<div class="message-row" class:mine={isMine(msg)}>
 					<div class="bubble" class:bubble-mine={isMine(msg)}>
+						{#if showSenderTag(msg, i)}
+							<span class="bubble-sender" style="color: {getAvatarColor(senderName(msg))}">
+								{senderName(msg)}
+							</span>
+						{/if}
 						<span class="bubble-text">{msg.text}</span>
 						<span class="bubble-time">{formatTime(msg.created_at)}</span>
 					</div>
@@ -99,6 +120,13 @@
 		background: #3eb489;
 		border-bottom-left-radius: 14px;
 		border-bottom-right-radius: 4px;
+	}
+
+	.bubble-sender {
+		font-size: 12px;
+		font-weight: 600;
+		line-height: 1.2;
+		/* color set inline per-sender via getAvatarColor */
 	}
 
 	.bubble-text {
