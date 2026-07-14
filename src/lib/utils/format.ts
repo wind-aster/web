@@ -13,6 +13,32 @@ export function formatTime(dateStr: string): string {
 		: d.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
+/** True if two ISO date strings fall on the same calendar day. */
+export function sameDay(a: string, b: string): boolean {
+	const d1 = new Date(a);
+	const d2 = new Date(b);
+	return (
+		d1.getDate() === d2.getDate() &&
+		d1.getMonth() === d2.getMonth() &&
+		d1.getFullYear() === d2.getFullYear()
+	);
+}
+
+/** Date-separator label: "Today" / "Yesterday" / localized date. */
+export function formatDaySeparator(dateStr: string): string {
+	const d = new Date(dateStr);
+	const now = new Date();
+	const yesterday = new Date(now);
+	yesterday.setDate(now.getDate() - 1);
+	if (sameDay(dateStr, now.toISOString())) return 'Today';
+	if (sameDay(dateStr, yesterday.toISOString())) return 'Yesterday';
+	return d.toLocaleDateString([], {
+		month: 'long',
+		day: 'numeric',
+		year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric'
+	});
+}
+
 /** Human-readable byte size, e.g. 2.4 MB. */
 export function formatBytes(bytes: number): string {
 	if (!bytes || bytes < 0) return '0 B';

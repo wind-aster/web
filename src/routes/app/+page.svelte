@@ -1,14 +1,16 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { auth } from '$lib/stores/auth.svelte';
 	import { chat } from '$lib/stores/chat.svelte';
 	import Sidebar from '$lib/components/chat/Sidebar.svelte';
 	import ChatHeader from '$lib/components/chat/ChatHeader.svelte';
 	import MessageThread from '$lib/components/chat/MessageThread.svelte';
 	import MessageComposer from '$lib/components/chat/MessageComposer.svelte';
+	import Toaster from '$lib/components/Toaster.svelte';
 
 	$effect(() => {
-		if (!auth.isAuthenticated) goto('/login', { replaceState: true });
+		if (!auth.isAuthenticated) goto(resolve('/login'), { replaceState: true });
 	});
 
 	$effect(() => {
@@ -20,7 +22,7 @@
 
 	function handleLogout() {
 		auth.logout();
-		goto('/login', { replaceState: true });
+		goto(resolve('/login'), { replaceState: true });
 	}
 </script>
 
@@ -57,6 +59,8 @@
 		</main>
 	</div>
 </div>
+
+<Toaster />
 
 <style>
 	.shell {

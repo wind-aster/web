@@ -2,9 +2,11 @@
 	import { auth } from '$lib/stores/auth.svelte';
 	import { chat } from '$lib/stores/chat.svelte';
 	import { SYSTEM_USER_ID } from '$lib/constants';
-	import { formatTime, formatBytes } from '$lib/utils/format';
+	import { formatTime, formatBytes, sameDay, formatDaySeparator } from '$lib/utils/format';
 	import { getAvatarColor } from '$lib/utils/avatar';
-	import MediaViewer from './MediaViewer.svelte';
+	import { getFile } from '$lib/api/uploads';
+	import { SvelteSet } from 'svelte/reactivity';
+	import MediaViewer, { type MediaItem } from './MediaViewer.svelte';
 	import type { Message, Attachment } from '$lib/api/chats';
 
 	function isImageAttachment(att: Attachment): boolean {
@@ -16,12 +18,57 @@
 	}
 
 	let el = $state<HTMLElement | null>(null);
-	let viewer = $state<{
-		url: string;
-		filename: string;
-		type: 'image' | 'video';
-		poster?: string;
-	} | null>(null);
+	let viewerIndex = $state<number | null>(null);
+
+	// Fresh presigned URLs fetched after a link expired (keyed by attachment id).
+	let refreshed = $state<Record<number, { url: string; thumb_url?: string }>>({});
+	const retried = new SvelteSet<number>();
+
+	function attUrl(att: Attachment): string {
+		return refreshed[att.id]?.url ?? att.url;
+	}
+	function attThumb(att: Attachment): string | undefined {
+		return refreshed[att.id]?.thumb_url ?? att.thumb_url;
+	}
+
+	// On a broken media element (expired presigned URL), fetch a fresh one once.
+	async function refreshUrl(id: number) {
+		if (retried.has(id) || !auth.token) return;
+		retried.add(id);
+		try {
+			const a = await getFile(auth.token, id);
+			refreshed = { ...refreshed, [id]: { url: a.url, thumb_url: a.thumb_url } };
+		} catch {
+			// leave broken; a later reload will retry with a fresh page load
+		}
+	}
+
+	// Flat, ordered list of all viewable media in the thread — powers the
+	// fullscreen viewer's prev/next navigation.
+	const mediaItems = $derived.by(() => {
+		const list: MediaItem[] = [];
+		for (const m of chat.messages) {
+			for (const att of m.attachments ?? []) {
+				if (isImageAttachment(att)) {
+					list.push({ id: att.id, url: attUrl(att), filename: att.filename, type: 'image' });
+				} else if (isVideoAttachment(att)) {
+					list.push({
+						id: att.id,
+						url: attUrl(att),
+						filename: att.filename,
+						type: 'video',
+						poster: attThumb(att)
+					});
+				}
+			}
+		}
+		return list;
+	});
+
+	function openViewer(att: Attachment) {
+		const idx = mediaItems.findIndex((m) => m.id === att.id);
+		if (idx >= 0) viewerIndex = idx;
+	}
 
 	function isMine(msg: Message): boolean {
 		return msg.sender_id === auth.userId;
@@ -62,6 +109,9 @@
 		<p class="loading-msg">No messages yet. Say hello!</p>
 	{:else}
 		{#each chat.messages as msg, i (msg.id)}
+			{#if i === 0 || !sameDay(chat.messages[i - 1].created_at, msg.created_at)}
+				<div class="day-sep"><span>{formatDaySeparator(msg.created_at)}</span></div>
+			{/if}
 			{#if isSystem(msg)}
 				<div class="system-notice">{msg.text}</div>
 			{:else}
@@ -73,29 +123,43 @@
 							</span>
 						{/if}
 						{#if msg.attachments && msg.attachments.length > 0}
+							{@const imgs = msg.attachments.filter(isImageAttachment)}
+							{@const others = msg.attachments.filter((a) => !isImageAttachment(a))}
 							<div class="attachments">
-								{#each msg.attachments as att (att.id)}
-									{#if isImageAttachment(att)}
-										<button
-											class="att-image"
-											onclick={() =>
-												(viewer = { url: att.url, filename: att.filename, type: 'image' })}
-										>
-											<img src={att.thumb_url ?? att.url} alt={att.filename} loading="lazy" />
-										</button>
-									{:else if isVideoAttachment(att)}
-										<button
-											class="att-video-thumb"
-											onclick={() =>
-												(viewer = {
-													url: att.url,
-													filename: att.filename,
-													type: 'video',
-													poster: att.thumb_url
-												})}
-										>
-											{#if att.thumb_url}
-												<img src={att.thumb_url} alt={att.filename} loading="lazy" />
+								{#if imgs.length >= 2}
+									<div class="attachments-grid">
+										{#each imgs as att (att.id)}
+											<button class="att-tile" onclick={() => openViewer(att)}>
+												<img
+													src={attThumb(att) ?? attUrl(att)}
+													alt={att.filename}
+													loading="lazy"
+													onerror={() => refreshUrl(att.id)}
+												/>
+											</button>
+										{/each}
+									</div>
+								{:else if imgs.length === 1}
+									{@const att = imgs[0]}
+									<button class="att-image" onclick={() => openViewer(att)}>
+										<img
+											src={attThumb(att) ?? attUrl(att)}
+											alt={att.filename}
+											loading="lazy"
+											onerror={() => refreshUrl(att.id)}
+										/>
+									</button>
+								{/if}
+								{#each others as att (att.id)}
+									{#if isVideoAttachment(att)}
+										<button class="att-video-thumb" onclick={() => openViewer(att)}>
+											{#if attThumb(att)}
+												<img
+													src={attThumb(att)}
+													alt={att.filename}
+													loading="lazy"
+													onerror={() => refreshUrl(att.id)}
+												/>
 											{/if}
 											<span class="play-badge" aria-hidden="true">
 												<svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor">
@@ -105,7 +169,7 @@
 										</button>
 									{:else}
 										<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external presigned storage URL -->
-										<a class="att-file" href={att.url} download={att.filename}>
+										<a class="att-file" href={attUrl(att)} download={att.filename}>
 											<span class="att-file-icon" aria-hidden="true">
 												<svg
 													width="20"
@@ -157,14 +221,8 @@
 	{/if}
 </div>
 
-{#if viewer}
-	<MediaViewer
-		src={viewer.url}
-		filename={viewer.filename}
-		type={viewer.type}
-		poster={viewer.poster}
-		onclose={() => (viewer = null)}
-	/>
+{#if viewerIndex !== null}
+	<MediaViewer items={mediaItems} index={viewerIndex} onclose={() => (viewerIndex = null)} />
 {/if}
 
 <style>
@@ -231,10 +289,48 @@
 		/* color set inline per-sender via getAvatarColor */
 	}
 
+	.day-sep {
+		align-self: center;
+		margin: 8px 0 2px;
+	}
+
+	.day-sep span {
+		display: inline-block;
+		padding: 3px 12px;
+		border-radius: 12px;
+		background: rgba(0, 0, 0, 0.06);
+		color: rgba(0, 0, 0, 0.5);
+		font-size: 11px;
+		font-weight: 600;
+	}
+
 	.attachments {
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
+	}
+
+	.attachments-grid {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 4px;
+		max-width: 260px;
+	}
+
+	.att-tile {
+		padding: 0;
+		border: none;
+		background: none;
+		cursor: pointer;
+		aspect-ratio: 1;
+		line-height: 0;
+	}
+
+	.att-tile img {
+		width: 100%;
+		height: 100%;
+		border-radius: 8px;
+		object-fit: cover;
 	}
 
 	.att-image {
@@ -404,6 +500,10 @@
 		}
 		.system-notice {
 			background: rgba(255, 255, 255, 0.07);
+			color: rgba(255, 255, 255, 0.5);
+		}
+		.day-sep span {
+			background: rgba(255, 255, 255, 0.08);
 			color: rgba(255, 255, 255, 0.5);
 		}
 		.bubble {

@@ -5,6 +5,7 @@
 	import { uploadFile, MAX_UPLOAD_SIZE, MAX_VIDEO_SIZE } from '$lib/api/uploads';
 	import { isVideo } from '$lib/utils/video';
 	import { formatBytes } from '$lib/utils/format';
+	import { toast } from '$lib/stores/toast.svelte';
 
 	interface Pending {
 		uid: number;
@@ -15,11 +16,13 @@
 		progress?: number;
 		attachmentId?: number;
 		previewUrl?: string; // local object URL for images
+		controller?: AbortController;
 	}
 
 	let inputText = $state('');
 	let pending = $state<Pending[]>([]);
 	let fileInput = $state<HTMLInputElement | null>(null);
+	let dragActive = $state(false);
 	let uid = 0;
 
 	const uploading = $derived(pending.some((p) => p.status === 'uploading'));
@@ -66,9 +69,12 @@
 		for (const file of files) {
 			const cap = isVideo(file) ? MAX_VIDEO_SIZE : MAX_UPLOAD_SIZE;
 			if (file.size > cap) {
-				alert(`"${file.name}" is ${formatBytes(file.size)} — over the ${formatBytes(cap)} limit.`);
+				toast.error(
+					`"${file.name}" is ${formatBytes(file.size)} — over the ${formatBytes(cap)} limit.`
+				);
 				continue;
 			}
+			const controller = new AbortController();
 			const entry: Pending = {
 				uid: uid++,
 				filename: file.name,
@@ -76,7 +82,8 @@
 				status: 'uploading',
 				phase: isVideo(file) ? 'processing' : 'uploading',
 				progress: 0,
-				previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined
+				previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
+				controller
 			};
 			pending = [...pending, entry];
 
@@ -86,14 +93,16 @@
 				);
 			};
 
-			uploadFile(auth.token, chatId, file, onProgress)
+			uploadFile(auth.token, chatId, file, onProgress, controller.signal)
 				.then((res) => {
 					pending = pending.map((p) =>
 						p.uid === entry.uid ? { ...p, status: 'done', attachmentId: res.attachmentId } : p
 					);
 				})
 				.catch((err) => {
+					if (err?.name === 'AbortError') return; // cancelled — chip already removed
 					console.error('Upload failed', err);
+					toast.error(`Couldn't upload "${file.name}"`);
 					pending = pending.map((p) => (p.uid === entry.uid ? { ...p, status: 'error' } : p));
 				});
 		}
@@ -101,8 +110,32 @@
 
 	function removePending(uidToRemove: number) {
 		const entry = pending.find((p) => p.uid === uidToRemove);
+		if (entry?.status === 'uploading') entry.controller?.abort();
 		if (entry?.previewUrl) URL.revokeObjectURL(entry.previewUrl);
 		pending = pending.filter((p) => p.uid !== uidToRemove);
+	}
+
+	// Drag & drop anywhere over the open chat drops files into the composer.
+	function hasFiles(e: DragEvent): boolean {
+		return Array.from(e.dataTransfer?.types ?? []).includes('Files');
+	}
+
+	function onWindowDragOver(e: DragEvent) {
+		if (chat.selectedChatId === null || !hasFiles(e)) return;
+		e.preventDefault();
+		dragActive = true;
+	}
+
+	function onWindowDragLeave(e: DragEvent) {
+		// Only clear when the drag actually leaves the window.
+		if (e.relatedTarget === null) dragActive = false;
+	}
+
+	function onWindowDrop(e: DragEvent) {
+		if (chat.selectedChatId === null || !hasFiles(e)) return;
+		e.preventDefault();
+		dragActive = false;
+		addFiles(Array.from(e.dataTransfer?.files ?? []));
 	}
 
 	function clearPending() {
@@ -122,6 +155,34 @@
 		}
 	}
 </script>
+
+<svelte:window
+	ondragover={onWindowDragOver}
+	ondragleave={onWindowDragLeave}
+	ondrop={onWindowDrop}
+/>
+
+{#if dragActive}
+	<div class="drop-overlay">
+		<div class="drop-hint">
+			<svg
+				width="40"
+				height="40"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="1.6"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+			>
+				<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+				<path d="M7 10l5-5 5 5" />
+				<path d="M12 5v13" />
+			</svg>
+			<span>Drop files to send</span>
+		</div>
+	</div>
+{/if}
 
 <div class="composer" onpaste={handlePaste}>
 	{#if pending.length > 0}
@@ -157,14 +218,13 @@
 					</span>
 					{#if p.status === 'uploading'}
 						<span class="chip-spinner" aria-label="Uploading"></span>
-					{:else}
-						<button
-							class="chip-remove"
-							onclick={() => removePending(p.uid)}
-							title="Remove"
-							aria-label="Remove attachment">×</button
-						>
 					{/if}
+					<button
+						class="chip-remove"
+						onclick={() => removePending(p.uid)}
+						title={p.status === 'uploading' ? 'Cancel' : 'Remove'}
+						aria-label={p.status === 'uploading' ? 'Cancel upload' : 'Remove attachment'}>×</button
+					>
 				</div>
 			{/each}
 		</div>
@@ -229,6 +289,36 @@
 		flex-shrink: 0;
 		border-top: 1px solid rgba(0, 0, 0, 0.08);
 		background: #ffffff;
+	}
+
+	.drop-overlay {
+		position: fixed;
+		inset: 0;
+		z-index: 900;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: rgba(62, 180, 137, 0.12);
+		backdrop-filter: blur(1px);
+		pointer-events: none;
+	}
+
+	.drop-hint {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 10px;
+		padding: 28px 40px;
+		border: 2px dashed var(--fluent-accent-primary, #3eb489);
+		border-radius: 16px;
+		background: rgba(255, 255, 255, 0.9);
+		color: #2a2a30;
+		font-size: 15px;
+		font-weight: 600;
+	}
+
+	.drop-hint svg {
+		color: var(--fluent-accent-primary, #3eb489);
 	}
 
 	.attach-row {
@@ -399,6 +489,10 @@
 		.composer {
 			background: #1e1e24;
 			border-top-color: rgba(255, 255, 255, 0.07);
+		}
+		.drop-hint {
+			background: rgba(30, 30, 36, 0.92);
+			color: #e8e8ea;
 		}
 		.chip {
 			background: #2e2e3a;

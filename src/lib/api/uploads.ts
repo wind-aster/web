@@ -50,15 +50,25 @@ async function createUpload(token: string, meta: CreateUploadMeta): Promise<Crea
 	return res.json();
 }
 
-async function putToStorage(url: string, blob: Blob, contentType: string): Promise<void> {
+async function putToStorage(
+	url: string,
+	blob: Blob,
+	contentType: string,
+	signal?: AbortSignal
+): Promise<void> {
 	// Direct PUT to object storage — the presigned URL authorizes it, so no
 	// Authorization header here (adding one would break the signature).
 	const res = await fetch(url, {
 		method: 'PUT',
 		headers: { 'Content-Type': contentType },
-		body: blob
+		body: blob,
+		signal
 	});
 	if (!res.ok) throw new Error('Failed to upload file to storage');
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+	if (signal?.aborted) throw new DOMException('Upload cancelled', 'AbortError');
 }
 
 /**
@@ -69,7 +79,8 @@ export async function uploadFile(
 	token: string,
 	chatId: number,
 	file: File,
-	onProgress?: UploadProgress
+	onProgress?: UploadProgress,
+	signal?: AbortSignal
 ): Promise<UploadedAttachment> {
 	let blob: Blob = file;
 	let mimeType = file.type || 'application/octet-stream';
@@ -100,6 +111,7 @@ export async function uploadFile(
 		if (mimeType === 'video/mp4') filename = file.name.replace(/\.[^.]+$/, '') + '.mp4';
 	}
 
+	throwIfAborted(signal); // e.g. cancelled during video transcode
 	onProgress?.('uploading');
 
 	const res = await createUpload(token, {
@@ -112,9 +124,10 @@ export async function uploadFile(
 		thumbnail: !!thumbBlob
 	});
 
-	await putToStorage(res.upload_url, blob, mimeType);
+	throwIfAborted(signal);
+	await putToStorage(res.upload_url, blob, mimeType, signal);
 	if (thumbBlob && res.thumb_upload_url) {
-		await putToStorage(res.thumb_upload_url, thumbBlob, thumbBlob.type || 'image/jpeg');
+		await putToStorage(res.thumb_upload_url, thumbBlob, thumbBlob.type || 'image/jpeg', signal);
 	}
 
 	return {
