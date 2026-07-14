@@ -2,11 +2,17 @@
 	import { auth } from '$lib/stores/auth.svelte';
 	import { chat } from '$lib/stores/chat.svelte';
 	import { SYSTEM_USER_ID } from '$lib/constants';
-	import { formatTime } from '$lib/utils/format';
+	import { formatTime, formatBytes } from '$lib/utils/format';
 	import { getAvatarColor } from '$lib/utils/avatar';
-	import type { Message } from '$lib/api/chats';
+	import ImageViewer from './ImageViewer.svelte';
+	import type { Message, Attachment } from '$lib/api/chats';
+
+	function isImageAttachment(att: Attachment): boolean {
+		return att.mime_type.startsWith('image/');
+	}
 
 	let el = $state<HTMLElement | null>(null);
+	let viewer = $state<{ url: string; filename: string } | null>(null);
 
 	function isMine(msg: Message): boolean {
 		return msg.sender_id === auth.userId;
@@ -34,8 +40,9 @@
 	// Auto-scroll to the bottom whenever the message list changes (new message,
 	// chat switch, reconnect resync). Referencing chat.messages tracks any reassignment.
 	$effect(() => {
-		chat.messages;
-		if (el) el.scrollTop = el.scrollHeight;
+		// Reading .length subscribes the effect to any list change (new message,
+		// chat switch, reconnect resync); the comparison is always true.
+		if (el && chat.messages.length >= 0) el.scrollTop = el.scrollHeight;
 	});
 </script>
 
@@ -56,7 +63,62 @@
 								{senderName(msg)}
 							</span>
 						{/if}
-						<span class="bubble-text">{msg.text}</span>
+						{#if msg.attachments && msg.attachments.length > 0}
+							<div class="attachments">
+								{#each msg.attachments as att (att.id)}
+									{#if isImageAttachment(att)}
+										<button
+											class="att-image"
+											onclick={() => (viewer = { url: att.url, filename: att.filename })}
+										>
+											<img src={att.thumb_url ?? att.url} alt={att.filename} loading="lazy" />
+										</button>
+									{:else}
+										<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external presigned storage URL -->
+										<a class="att-file" href={att.url} download={att.filename}>
+											<span class="att-file-icon" aria-hidden="true">
+												<svg
+													width="20"
+													height="20"
+													viewBox="0 0 24 24"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+												>
+													<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+													<path d="M14 2v6h6" />
+												</svg>
+											</span>
+											<span class="att-file-meta">
+												<span class="att-file-name" title={att.filename}>{att.filename}</span>
+												<span class="att-file-size">{formatBytes(att.size_bytes)}</span>
+											</span>
+											<span class="att-file-dl" aria-hidden="true">
+												<svg
+													width="16"
+													height="16"
+													viewBox="0 0 24 24"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+												>
+													<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+													<path d="M7 10l5 5 5-5" />
+													<path d="M12 15V3" />
+												</svg>
+											</span>
+										</a>
+									{/if}
+								{/each}
+							</div>
+						{/if}
+						{#if msg.text}
+							<span class="bubble-text">{msg.text}</span>
+						{/if}
 						<span class="bubble-time">{formatTime(msg.created_at)}</span>
 					</div>
 				</div>
@@ -64,6 +126,10 @@
 		{/each}
 	{/if}
 </div>
+
+{#if viewer}
+	<ImageViewer src={viewer.url} filename={viewer.filename} onclose={() => (viewer = null)} />
+{/if}
 
 <style>
 	.messages {
@@ -129,6 +195,106 @@
 		/* color set inline per-sender via getAvatarColor */
 	}
 
+	.attachments {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+
+	.att-image {
+		display: block;
+		padding: 0;
+		border: none;
+		background: none;
+		line-height: 0;
+		cursor: pointer;
+	}
+
+	.att-image img {
+		max-width: 260px;
+		max-height: 320px;
+		width: auto;
+		height: auto;
+		border-radius: 10px;
+		object-fit: cover;
+	}
+
+	.att-file {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		min-width: 180px;
+		max-width: 260px;
+		padding: 8px 10px;
+		border-radius: 10px;
+		background: rgba(0, 0, 0, 0.05);
+		text-decoration: none;
+		color: inherit;
+	}
+
+	.att-file:hover {
+		background: rgba(0, 0, 0, 0.09);
+	}
+
+	.att-file-icon {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 34px;
+		height: 34px;
+		flex-shrink: 0;
+		border-radius: 8px;
+		background: rgba(0, 0, 0, 0.08);
+		color: rgba(0, 0, 0, 0.55);
+	}
+
+	.att-file-meta {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+		flex: 1;
+	}
+
+	.att-file-name {
+		font-size: 13px;
+		color: #1f1f1f;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.att-file-size {
+		font-size: 11px;
+		color: rgba(0, 0, 0, 0.45);
+	}
+
+	.att-file-dl {
+		flex-shrink: 0;
+		color: rgba(0, 0, 0, 0.4);
+	}
+
+	.bubble-mine .att-file {
+		background: rgba(255, 255, 255, 0.18);
+	}
+
+	.bubble-mine .att-file:hover {
+		background: rgba(255, 255, 255, 0.26);
+	}
+
+	.bubble-mine .att-file-icon {
+		background: rgba(255, 255, 255, 0.22);
+		color: #ffffff;
+	}
+
+	.bubble-mine .att-file-name {
+		color: #ffffff;
+	}
+
+	.bubble-mine .att-file-size,
+	.bubble-mine .att-file-dl {
+		color: rgba(255, 255, 255, 0.7);
+	}
+
 	.bubble-text {
 		font-size: 14px;
 		line-height: 1.45;
@@ -170,6 +336,23 @@
 		}
 		.bubble-time {
 			color: rgba(255, 255, 255, 0.38);
+		}
+		.att-file {
+			background: rgba(255, 255, 255, 0.06);
+		}
+		.att-file:hover {
+			background: rgba(255, 255, 255, 0.1);
+		}
+		.att-file-icon {
+			background: rgba(255, 255, 255, 0.1);
+			color: rgba(255, 255, 255, 0.6);
+		}
+		.att-file-name {
+			color: #e8e8ea;
+		}
+		.att-file-size,
+		.att-file-dl {
+			color: rgba(255, 255, 255, 0.4);
 		}
 	}
 </style>

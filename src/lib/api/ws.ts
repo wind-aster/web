@@ -14,11 +14,7 @@ let reconnectAttempts = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let manualClose = false;
 
-export function connectWS(
-	t: string,
-	onMessage: MessageHandler,
-	onReconnect?: () => void
-): void {
+export function connectWS(t: string, onMessage: MessageHandler, onReconnect?: () => void): void {
 	manualClose = false;
 	reconnectAttempts = 0;
 	token = t;
@@ -69,9 +65,9 @@ function scheduleReconnect(): void {
 	reconnectTimer = setTimeout(open, delay);
 }
 
-export function sendWS(chatId: number, text: string): boolean {
+export function sendWS(chatId: number, text: string, attachmentIds: number[] = []): boolean {
 	if (!socket || socket.readyState !== WebSocket.OPEN) return false;
-	socket.send(JSON.stringify({ chat_id: chatId, text }));
+	socket.send(JSON.stringify({ chat_id: chatId, text, attachment_ids: attachmentIds }));
 	return true;
 }
 

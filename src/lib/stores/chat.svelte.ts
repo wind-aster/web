@@ -45,8 +45,7 @@ function createChatStore() {
 			if (u.id === auth.userId) return false;
 			if (!q) return true;
 			return (
-				u.username.toLowerCase().includes(q) ||
-				(u.display_name ?? '').toLowerCase().includes(q)
+				u.username.toLowerCase().includes(q) || (u.display_name ?? '').toLowerCase().includes(q)
 			);
 		});
 	});
@@ -72,29 +71,28 @@ function createChatStore() {
 		}
 	}
 
-	async function sendMessage(rawText: string): Promise<boolean> {
+	async function sendMessage(rawText: string, attachmentIds: number[] = []): Promise<boolean> {
 		const text = rawText.trim();
-		if (!text || selectedChatId === null) return false;
+		if ((!text && attachmentIds.length === 0) || selectedChatId === null) return false;
 		const chatId = selectedChatId;
 
-		if (sendWS(chatId, text)) return true;
+		if (sendWS(chatId, text, attachmentIds)) return true;
 
 		// WS not connected — fall back to REST and add optimistically.
 		if (!auth.token) return false;
 		try {
-			const res = await sendMessageRest(auth.token, chatId, text);
+			const res = await sendMessageRest(auth.token, chatId, text, attachmentIds);
 			const sentMsg: Message = {
 				id: res.message_id,
 				sender_id: auth.userId ?? 0,
 				chat_id: chatId,
 				text,
-				created_at: res.created_at
+				created_at: res.created_at,
+				attachments: res.attachments
 			};
 			if (selectedChatId === chatId) messages = [...messages, sentMsg];
 			chats = chats.map((c) =>
-				c.id === chatId
-					? { ...c, last_messages: [...c.last_messages.slice(-4), sentMsg] }
-					: c
+				c.id === chatId ? { ...c, last_messages: [...c.last_messages.slice(-4), sentMsg] } : c
 			);
 			return true;
 		} catch (e) {
@@ -176,9 +174,7 @@ function createChatStore() {
 		}
 		if (chats.some((c) => c.id === msg.chat_id)) {
 			chats = chats.map((c) =>
-				c.id === msg.chat_id
-					? { ...c, last_messages: [...c.last_messages.slice(-4), msg] }
-					: c
+				c.id === msg.chat_id ? { ...c, last_messages: [...c.last_messages.slice(-4), msg] } : c
 			);
 		} else {
 			// Message for a chat we aren't tracking yet (new DM/group) — pull it in.

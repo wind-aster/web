@@ -1,11 +1,23 @@
 const API_BASE = import.meta.env.VITE_API_URL ?? '';
 
+export interface Attachment {
+	id: number;
+	filename: string;
+	mime_type: string;
+	size_bytes: number;
+	width?: number;
+	height?: number;
+	url: string;
+	thumb_url?: string;
+}
+
 export interface Message {
 	id: number;
 	sender_id: number;
 	chat_id: number;
 	text: string;
 	created_at: string;
+	attachments?: Attachment[];
 }
 
 export interface ChatMember {
