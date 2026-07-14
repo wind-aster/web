@@ -30,10 +30,36 @@
 		fileInput?.click();
 	}
 
-	async function handleFiles(e: Event) {
+	function handleFiles(e: Event) {
 		const input = e.target as HTMLInputElement;
 		const files = Array.from(input.files ?? []);
 		input.value = ''; // allow re-selecting the same file
+		addFiles(files);
+	}
+
+	// Accept images from the clipboard (e.g. a pasted screenshot). Falls through
+	// for non-image pastes so normal text paste keeps working.
+	function handlePaste(e: ClipboardEvent) {
+		const items = Array.from(e.clipboardData?.items ?? []);
+		const images: File[] = [];
+		for (const item of items) {
+			if (item.kind !== 'file' || !item.type.startsWith('image/')) continue;
+			const file = item.getAsFile();
+			if (!file) continue;
+			// Pasted images usually arrive as a generic "image.png"/empty name.
+			if (!file.name || file.name === 'image.png') {
+				const ext = file.type.split('/')[1] || 'png';
+				images.push(new File([file], `pasted-${Date.now()}.${ext}`, { type: file.type }));
+			} else {
+				images.push(file);
+			}
+		}
+		if (images.length === 0) return;
+		e.preventDefault();
+		addFiles(images);
+	}
+
+	function addFiles(files: File[]) {
 		const chatId = chat.selectedChatId;
 		if (chatId === null || !auth.token) return;
 
@@ -97,7 +123,7 @@
 	}
 </script>
 
-<div class="composer">
+<div class="composer" onpaste={handlePaste}>
 	{#if pending.length > 0}
 		<div class="attach-row">
 			{#each pending as p (p.uid)}
