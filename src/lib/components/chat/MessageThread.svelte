@@ -93,21 +93,46 @@
 		return !prev || prev.sender_id !== msg.sender_id;
 	}
 
-	// Auto-scroll to the bottom whenever the message list changes (new message,
-	// chat switch, reconnect resync). Referencing chat.messages tracks any reassignment.
+	// Scroll handling. On a normal list change (send / incoming / chat switch) we
+	// pin to the bottom; when older messages are prepended we instead restore the
+	// viewport so it doesn't jump.
+	let pendingPrepend = false;
+	let prevHeight = 0;
+	let prevTop = 0;
+
+	function onScroll() {
+		if (!el || pendingPrepend || chat.loadingOlder || !chat.hasMoreOlder) return;
+		if (el.scrollTop <= 80) {
+			pendingPrepend = true;
+			prevHeight = el.scrollHeight;
+			prevTop = el.scrollTop;
+			chat.loadOlder();
+		}
+	}
+
 	$effect(() => {
-		// Reading .length subscribes the effect to any list change (new message,
-		// chat switch, reconnect resync); the comparison is always true.
-		if (el && chat.messages.length >= 0) el.scrollTop = el.scrollHeight;
+		// Reading .length subscribes the effect to any list change.
+		const len = chat.messages.length;
+		if (!el) return;
+		if (pendingPrepend) {
+			// Keep the previously-visible content in place after prepending.
+			el.scrollTop = el.scrollHeight - prevHeight + prevTop;
+			pendingPrepend = false;
+		} else if (len >= 0) {
+			el.scrollTop = el.scrollHeight;
+		}
 	});
 </script>
 
-<div class="messages" bind:this={el}>
+<div class="messages" bind:this={el} onscroll={onScroll}>
 	{#if chat.loadingMessages}
 		<p class="loading-msg">Loading…</p>
 	{:else if chat.messages.length === 0}
 		<p class="loading-msg">No messages yet. Say hello!</p>
 	{:else}
+		{#if chat.loadingOlder}
+			<p class="loading-older">Loading older messages…</p>
+		{/if}
 		{#each chat.messages as msg, i (msg.id)}
 			{#if i === 0 || !sameDay(chat.messages[i - 1].created_at, msg.created_at)}
 				<div class="day-sep"><span>{formatDaySeparator(msg.created_at)}</span></div>
@@ -241,6 +266,13 @@
 		font-size: 13px;
 		color: rgba(0, 0, 0, 0.4);
 		text-align: center;
+	}
+
+	.loading-older {
+		align-self: center;
+		margin: 4px 0;
+		font-size: 12px;
+		color: rgba(0, 0, 0, 0.4);
 	}
 
 	.system-notice {
@@ -495,7 +527,8 @@
 		.messages {
 			background: #252530;
 		}
-		.loading-msg {
+		.loading-msg,
+		.loading-older {
 			color: rgba(255, 255, 255, 0.35);
 		}
 		.system-notice {

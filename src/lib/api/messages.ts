@@ -3,8 +3,15 @@ export type { Message };
 
 const API_BASE = import.meta.env.VITE_API_URL ?? '';
 
-export async function getMessages(token: string, chatId: number): Promise<Message[]> {
-	const res = await fetch(`${API_BASE}/api/messages?chat_id=${chatId}`, {
+export async function getMessages(
+	token: string,
+	chatId: number,
+	limit = 50,
+	before?: number
+): Promise<Message[]> {
+	const params = new URLSearchParams({ chat_id: String(chatId), limit: String(limit) });
+	if (before !== undefined) params.set('before', String(before));
+	const res = await fetch(`${API_BASE}/api/messages?${params}`, {
 		headers: { Authorization: `Bearer ${token}` }
 	});
 	if (!res.ok) throw new Error('Failed to fetch messages');

@@ -16,11 +16,15 @@ function lastActivity(chat: ChatDetail): number {
 	return last ? new Date(last.created_at).getTime() : 0;
 }
 
+const PAGE = 50;
+
 function createChatStore() {
 	let chats = $state<ChatDetail[]>([]);
 	let selectedChatId = $state<number | null>(null);
 	let messages = $state<Message[]>([]);
 	let loadingMessages = $state(false);
+	let hasMoreOlder = $state(false);
+	let loadingOlder = $state(false);
 
 	// User search / new chat panel
 	let panelMode = $state<'none' | 'dm' | 'group'>('none');
@@ -59,15 +63,36 @@ function createChatStore() {
 		if (selectedChatId === id) return;
 		selectedChatId = id;
 		messages = [];
+		hasMoreOlder = false;
 		loadingMessages = true;
 		try {
 			if (auth.token) {
-				const data = await getMessages(auth.token, id);
+				const data = await getMessages(auth.token, id, PAGE);
 				// Guard against a stale fetch resolving after the user switched chats.
-				if (selectedChatId === id) messages = data ?? [];
+				if (selectedChatId === id) {
+					messages = data ?? [];
+					hasMoreOlder = (data?.length ?? 0) === PAGE;
+				}
 			}
 		} finally {
 			if (selectedChatId === id) loadingMessages = false;
+		}
+	}
+
+	// Load an older page and prepend it (infinite scroll upward).
+	async function loadOlder() {
+		if (loadingOlder || !hasMoreOlder || selectedChatId === null || !auth.token) return;
+		const chatId = selectedChatId;
+		const before = messages[0]?.id;
+		if (before === undefined) return;
+		loadingOlder = true;
+		try {
+			const older = await getMessages(auth.token, chatId, PAGE, before);
+			if (selectedChatId !== chatId) return; // switched away mid-fetch
+			if (older && older.length > 0) messages = [...older, ...messages];
+			hasMoreOlder = (older?.length ?? 0) === PAGE;
+		} finally {
+			if (selectedChatId === chatId) loadingOlder = false;
 		}
 	}
 
@@ -187,8 +212,11 @@ function createChatStore() {
 		refreshChats();
 		if (selectedChatId !== null && auth.token) {
 			const id = selectedChatId;
-			getMessages(auth.token, id).then((data) => {
-				if (selectedChatId === id) messages = data ?? [];
+			getMessages(auth.token, id, PAGE).then((data) => {
+				if (selectedChatId === id) {
+					messages = data ?? [];
+					hasMoreOlder = (data?.length ?? 0) === PAGE;
+				}
 			});
 		}
 	}
@@ -223,6 +251,13 @@ function createChatStore() {
 		get loadingMessages() {
 			return loadingMessages;
 		},
+		get hasMoreOlder() {
+			return hasMoreOlder;
+		},
+		get loadingOlder() {
+			return loadingOlder;
+		},
+		loadOlder,
 		get panelMode() {
 			return panelMode;
 		},
