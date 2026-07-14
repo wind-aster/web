@@ -4,10 +4,12 @@
 	interface Props {
 		src: string;
 		filename: string;
+		type: 'image' | 'video';
+		poster?: string;
 		onclose: () => void;
 	}
 
-	let { src, filename, onclose }: Props = $props();
+	let { src, filename, type, poster, onclose }: Props = $props();
 
 	function onKeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape') onclose();
@@ -29,7 +31,7 @@
 <div class="overlay" role="dialog" aria-modal="true" aria-label={filename}>
 	<button
 		class="backdrop"
-		aria-label="Close image viewer"
+		aria-label="Close media viewer"
 		onclick={onclose}
 		transition:fade={{ duration: 150 }}
 	></button>
@@ -50,9 +52,22 @@
 		</svg>
 	</button>
 
-	<!-- The backdrop is a sibling behind the image, not an ancestor, so clicks on
-	     the image don't reach it — no stopPropagation needed to keep it open. -->
-	<img class="image" {src} alt={filename} transition:scale={{ duration: 180, start: 0.9 }} />
+	<!-- The backdrop is a sibling behind the media, not an ancestor, so clicks on
+	     the media (or its controls) don't reach it — clicking the dark margin closes. -->
+	{#if type === 'video'}
+		<!-- svelte-ignore a11y_media_has_caption -->
+		<video
+			class="media"
+			{src}
+			{poster}
+			controls
+			autoplay
+			playsinline
+			transition:scale={{ duration: 180, start: 0.9 }}
+		></video>
+	{:else}
+		<img class="media" {src} alt={filename} transition:scale={{ duration: 180, start: 0.9 }} />
+	{/if}
 </div>
 
 <style>
@@ -76,7 +91,7 @@
 		cursor: zoom-out;
 	}
 
-	.image {
+	.media {
 		position: relative;
 		max-width: 92vw;
 		max-height: 92vh;

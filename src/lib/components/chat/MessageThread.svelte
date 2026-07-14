@@ -4,15 +4,24 @@
 	import { SYSTEM_USER_ID } from '$lib/constants';
 	import { formatTime, formatBytes } from '$lib/utils/format';
 	import { getAvatarColor } from '$lib/utils/avatar';
-	import ImageViewer from './ImageViewer.svelte';
+	import MediaViewer from './MediaViewer.svelte';
 	import type { Message, Attachment } from '$lib/api/chats';
 
 	function isImageAttachment(att: Attachment): boolean {
 		return att.mime_type.startsWith('image/');
 	}
 
+	function isVideoAttachment(att: Attachment): boolean {
+		return att.mime_type.startsWith('video/');
+	}
+
 	let el = $state<HTMLElement | null>(null);
-	let viewer = $state<{ url: string; filename: string } | null>(null);
+	let viewer = $state<{
+		url: string;
+		filename: string;
+		type: 'image' | 'video';
+		poster?: string;
+	} | null>(null);
 
 	function isMine(msg: Message): boolean {
 		return msg.sender_id === auth.userId;
@@ -69,9 +78,30 @@
 									{#if isImageAttachment(att)}
 										<button
 											class="att-image"
-											onclick={() => (viewer = { url: att.url, filename: att.filename })}
+											onclick={() =>
+												(viewer = { url: att.url, filename: att.filename, type: 'image' })}
 										>
 											<img src={att.thumb_url ?? att.url} alt={att.filename} loading="lazy" />
+										</button>
+									{:else if isVideoAttachment(att)}
+										<button
+											class="att-video-thumb"
+											onclick={() =>
+												(viewer = {
+													url: att.url,
+													filename: att.filename,
+													type: 'video',
+													poster: att.thumb_url
+												})}
+										>
+											{#if att.thumb_url}
+												<img src={att.thumb_url} alt={att.filename} loading="lazy" />
+											{/if}
+											<span class="play-badge" aria-hidden="true">
+												<svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor">
+													<path d="M8 5v14l11-7z" />
+												</svg>
+											</span>
 										</button>
 									{:else}
 										<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external presigned storage URL -->
@@ -128,7 +158,13 @@
 </div>
 
 {#if viewer}
-	<ImageViewer src={viewer.url} filename={viewer.filename} onclose={() => (viewer = null)} />
+	<MediaViewer
+		src={viewer.url}
+		filename={viewer.filename}
+		type={viewer.type}
+		poster={viewer.poster}
+		onclose={() => (viewer = null)}
+	/>
 {/if}
 
 <style>
@@ -217,6 +253,48 @@
 		height: auto;
 		border-radius: 10px;
 		object-fit: cover;
+	}
+
+	.att-video-thumb {
+		position: relative;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 120px;
+		min-height: 90px;
+		max-width: 260px;
+		padding: 0;
+		border: none;
+		border-radius: 10px;
+		background: #000;
+		cursor: pointer;
+		overflow: hidden;
+		line-height: 0;
+	}
+
+	.att-video-thumb img {
+		max-width: 260px;
+		max-height: 320px;
+		width: auto;
+		height: auto;
+		object-fit: cover;
+	}
+
+	.play-badge {
+		position: absolute;
+		top: 50%;
+		left: 50%;
+		transform: translate(-50%, -50%);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 48px;
+		height: 48px;
+		border-radius: 50%;
+		background: rgba(0, 0, 0, 0.55);
+		color: #ffffff;
+		padding-left: 3px;
+		pointer-events: none;
 	}
 
 	.att-file {

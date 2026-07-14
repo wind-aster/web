@@ -2,7 +2,8 @@
 	import { TextField } from 'svelte-fluentui';
 	import { chat } from '$lib/stores/chat.svelte';
 	import { auth } from '$lib/stores/auth.svelte';
-	import { uploadFile, MAX_UPLOAD_SIZE } from '$lib/api/uploads';
+	import { uploadFile, MAX_UPLOAD_SIZE, MAX_VIDEO_SIZE } from '$lib/api/uploads';
+	import { isVideo } from '$lib/utils/video';
 	import { formatBytes } from '$lib/utils/format';
 
 	interface Pending {
@@ -10,6 +11,8 @@
 		filename: string;
 		sizeBytes: number;
 		status: 'uploading' | 'done' | 'error';
+		phase?: 'processing' | 'uploading';
+		progress?: number;
 		attachmentId?: number;
 		previewUrl?: string; // local object URL for images
 	}
@@ -35,10 +38,9 @@
 		if (chatId === null || !auth.token) return;
 
 		for (const file of files) {
-			if (file.size > MAX_UPLOAD_SIZE) {
-				alert(
-					`"${file.name}" is ${formatBytes(file.size)} — over the ${formatBytes(MAX_UPLOAD_SIZE)} limit.`
-				);
+			const cap = isVideo(file) ? MAX_VIDEO_SIZE : MAX_UPLOAD_SIZE;
+			if (file.size > cap) {
+				alert(`"${file.name}" is ${formatBytes(file.size)} — over the ${formatBytes(cap)} limit.`);
 				continue;
 			}
 			const entry: Pending = {
@@ -46,11 +48,19 @@
 				filename: file.name,
 				sizeBytes: file.size,
 				status: 'uploading',
+				phase: isVideo(file) ? 'processing' : 'uploading',
+				progress: 0,
 				previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined
 			};
 			pending = [...pending, entry];
 
-			uploadFile(auth.token, chatId, file)
+			const onProgress = (phase: 'processing' | 'uploading', pct?: number) => {
+				pending = pending.map((p) =>
+					p.uid === entry.uid ? { ...p, phase, progress: pct ?? p.progress } : p
+				);
+			};
+
+			uploadFile(auth.token, chatId, file, onProgress)
 				.then((res) => {
 					pending = pending.map((p) =>
 						p.uid === entry.uid ? { ...p, status: 'done', attachmentId: res.attachmentId } : p
@@ -114,9 +124,9 @@
 					<span class="chip-meta">
 						<span class="chip-name" title={p.filename}>{p.filename}</span>
 						<span class="chip-sub">
-							{#if p.status === 'uploading'}Uploading…{:else if p.status === 'error'}Failed{:else}{formatBytes(
-									p.sizeBytes
-								)}{/if}
+							{#if p.status === 'uploading'}
+								{#if p.phase === 'processing'}Compressing {p.progress ?? 0}%{:else}Uploading…{/if}
+							{:else if p.status === 'error'}Failed{:else}{formatBytes(p.sizeBytes)}{/if}
 						</span>
 					</span>
 					{#if p.status === 'uploading'}

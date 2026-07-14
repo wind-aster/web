@@ -13,6 +13,11 @@ export default defineConfig({
 			}
 		}
 	},
+	// ffmpeg.wasm ships its own worker/wasm; pre-bundling breaks its internal
+	// worker URL resolution, so leave these to be loaded as-is.
+	optimizeDeps: {
+		exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util']
+	},
 	plugins: [
 		sveltekit({
 			preprocess: vitePreprocess(),
