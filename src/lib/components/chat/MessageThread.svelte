@@ -6,8 +6,13 @@
 	import { getAvatarColor } from '$lib/utils/avatar';
 	import { getFile } from '$lib/api/uploads';
 	import { SvelteSet } from 'svelte/reactivity';
+	import { Dialog } from 'svelte-fluentui';
 	import MediaViewer, { type MediaItem } from './MediaViewer.svelte';
 	import type { Message, Attachment } from '$lib/api/chats';
+
+	// Which message's action menu is open, and which is pending delete confirmation.
+	let menuFor = $state<number | null>(null);
+	let confirmDeleteId = $state<number | null>(null);
 
 	function isImageAttachment(att: Attachment): boolean {
 		return att.mime_type.startsWith('image/');
@@ -70,6 +75,36 @@
 		if (idx >= 0) viewerIndex = idx;
 	}
 
+	function toggleMenu(id: number) {
+		menuFor = menuFor === id ? null : id;
+	}
+
+	function doReply(msg: Message) {
+		chat.startReply(msg);
+		menuFor = null;
+	}
+
+	function doEdit(msg: Message) {
+		chat.startEdit(msg);
+		menuFor = null;
+	}
+
+	function doDelete(msg: Message) {
+		confirmDeleteId = msg.id;
+		menuFor = null;
+	}
+
+	// Scroll to a still-loaded message (e.g. clicking a reply quote). Best-effort:
+	// if the target isn't in the current page, nothing happens.
+	function scrollToMessage(id: number) {
+		const target = el?.querySelector<HTMLElement>(`[data-mid="${id}"]`);
+		if (target) {
+			target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			target.classList.add('flash');
+			setTimeout(() => target.classList.remove('flash'), 1200);
+		}
+	}
+
 	function isMine(msg: Message): boolean {
 		return msg.sender_id === auth.userId;
 	}
@@ -110,19 +145,27 @@
 		}
 	}
 
+	// Only auto-scroll to the bottom on a chat switch or when the list grows
+	// (a new message). In-place edits/deletes must not yank the viewport.
+	let prevLen = 0;
+	let prevChat: number | null = null;
 	$effect(() => {
-		// Reading .length subscribes the effect to any list change.
 		const len = chat.messages.length;
+		const cid = chat.selectedChatId;
 		if (!el) return;
 		if (pendingPrepend) {
 			// Keep the previously-visible content in place after prepending.
 			el.scrollTop = el.scrollHeight - prevHeight + prevTop;
 			pendingPrepend = false;
-		} else if (len >= 0) {
+		} else if (cid !== prevChat || len > prevLen) {
 			el.scrollTop = el.scrollHeight;
 		}
+		prevLen = len;
+		prevChat = cid;
 	});
 </script>
+
+<svelte:window onclick={() => (menuFor = null)} />
 
 <div class="messages" bind:this={el} onscroll={onScroll}>
 	{#if chat.loadingMessages}
@@ -140,12 +183,18 @@
 			{#if isSystem(msg)}
 				<div class="system-notice">{msg.text}</div>
 			{:else}
-				<div class="message-row" class:mine={isMine(msg)}>
+				<div class="message-row" class:mine={isMine(msg)} data-mid={msg.id}>
 					<div class="bubble" class:bubble-mine={isMine(msg)}>
 						{#if showSenderTag(msg, i)}
 							<span class="bubble-sender" style="color: {getAvatarColor(senderName(msg))}">
 								{senderName(msg)}
 							</span>
+						{/if}
+						{#if msg.reply_preview}
+							<button class="reply-quote" onclick={() => scrollToMessage(msg.reply_preview!.id)}>
+								<span class="reply-quote-name">{msg.reply_preview.sender_name || 'Unknown'}</span>
+								<span class="reply-quote-text">{msg.reply_preview.text}</span>
+							</button>
 						{/if}
 						{#if msg.attachments && msg.attachments.length > 0}
 							{@const imgs = msg.attachments.filter(isImageAttachment)}
@@ -238,7 +287,36 @@
 						{#if msg.text}
 							<span class="bubble-text">{msg.text}</span>
 						{/if}
-						<span class="bubble-time">{formatTime(msg.created_at)}</span>
+						<span class="bubble-time">
+							{#if msg.edited_at}<span class="edited">edited</span>{/if}
+							{formatTime(msg.created_at)}
+						</span>
+					</div>
+					<div class="msg-actions">
+						<button
+							class="action-trigger"
+							onclick={(e) => {
+								e.stopPropagation();
+								toggleMenu(msg.id);
+							}}
+							title="Message actions"
+							aria-label="Message actions"
+						>
+							<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+								<circle cx="5" cy="12" r="1.6" />
+								<circle cx="12" cy="12" r="1.6" />
+								<circle cx="19" cy="12" r="1.6" />
+							</svg>
+						</button>
+						{#if menuFor === msg.id}
+							<div class="action-menu">
+								<button onclick={() => doReply(msg)}>Reply</button>
+								{#if isMine(msg)}
+									<button onclick={() => doEdit(msg)}>Edit</button>
+									<button class="danger" onclick={() => doDelete(msg)}>Delete</button>
+								{/if}
+							</div>
+						{/if}
 					</div>
 				</div>
 			{/if}
@@ -249,6 +327,29 @@
 {#if viewerIndex !== null}
 	<MediaViewer items={mediaItems} index={viewerIndex} onclose={() => (viewerIndex = null)} />
 {/if}
+
+<Dialog
+	modal
+	visible={confirmDeleteId !== null}
+	title="Delete message?"
+	onClose={() => (confirmDeleteId = null)}
+	primaryAction={{
+		label: 'Delete',
+		appearance: 'accent',
+		onClick: () => {
+			if (confirmDeleteId !== null) chat.removeMessage(confirmDeleteId);
+			confirmDeleteId = null;
+		}
+	}}
+	secondaryAction={{
+		label: 'Cancel',
+		onClick: () => {
+			confirmDeleteId = null;
+		}
+	}}
+>
+	This message will be removed for everyone. Any attached files are permanently deleted.
+</Dialog>
 
 <style>
 	.messages {
@@ -291,10 +392,151 @@
 	.message-row {
 		display: flex;
 		justify-content: flex-start;
+		align-items: center;
+		gap: 4px;
 	}
 
 	.message-row.mine {
 		justify-content: flex-end;
+	}
+
+	/* Per-message action trigger + dropdown menu. */
+	.msg-actions {
+		position: relative;
+		flex-shrink: 0;
+	}
+
+	.mine .msg-actions {
+		order: -1; /* actions on the left of own (right-aligned) bubbles */
+	}
+
+	.action-trigger {
+		opacity: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 26px;
+		height: 26px;
+		padding: 0;
+		border: none;
+		border-radius: 50%;
+		background: transparent;
+		color: rgba(0, 0, 0, 0.4);
+		cursor: pointer;
+	}
+
+	.message-row:hover .action-trigger {
+		opacity: 1;
+	}
+
+	.action-trigger:hover {
+		background: rgba(0, 0, 0, 0.08);
+		color: #1f1f1f;
+	}
+
+	.action-menu {
+		position: absolute;
+		top: 100%;
+		left: 0;
+		z-index: 20;
+		min-width: 120px;
+		padding: 4px;
+		display: flex;
+		flex-direction: column;
+		background: #ffffff;
+		border: 1px solid rgba(0, 0, 0, 0.1);
+		border-radius: 10px;
+		box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+	}
+
+	.mine .action-menu {
+		left: auto;
+		right: 0;
+	}
+
+	.action-menu button {
+		text-align: left;
+		padding: 7px 10px;
+		border: none;
+		background: transparent;
+		border-radius: 6px;
+		font-size: 13px;
+		color: #1f1f1f;
+		cursor: pointer;
+	}
+
+	.action-menu button:hover {
+		background: rgba(0, 0, 0, 0.06);
+	}
+
+	.action-menu button.danger {
+		color: #d13438;
+	}
+
+	.action-menu button.danger:hover {
+		background: rgba(209, 52, 56, 0.1);
+	}
+
+	/* Reply quote inside a bubble. */
+	.reply-quote {
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+		text-align: left;
+		margin-bottom: 2px;
+		padding: 3px 8px;
+		border: none;
+		border-left: 3px solid var(--fluent-accent-primary, #3eb489);
+		border-radius: 4px;
+		background: rgba(0, 0, 0, 0.05);
+		cursor: pointer;
+	}
+
+	.reply-quote-name {
+		font-size: 12px;
+		font-weight: 600;
+		color: var(--fluent-accent-primary, #3eb489);
+	}
+
+	.reply-quote-text {
+		font-size: 12px;
+		color: rgba(0, 0, 0, 0.55);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		max-width: 220px;
+	}
+
+	.bubble-mine .reply-quote {
+		background: rgba(255, 255, 255, 0.18);
+		border-left-color: rgba(255, 255, 255, 0.85);
+	}
+
+	.bubble-mine .reply-quote-name {
+		color: #ffffff;
+	}
+
+	.bubble-mine .reply-quote-text {
+		color: rgba(255, 255, 255, 0.8);
+	}
+
+	.edited {
+		font-style: italic;
+		opacity: 0.75;
+		margin-right: 3px;
+	}
+
+	.message-row:global(.flash) .bubble {
+		animation: flash 1.2s ease;
+	}
+
+	@keyframes flash {
+		0% {
+			box-shadow: 0 0 0 0 rgba(62, 180, 137, 0.5);
+		}
+		100% {
+			box-shadow: 0 0 0 6px rgba(62, 180, 137, 0);
+		}
 	}
 
 	.bubble {
@@ -564,6 +806,36 @@
 		.att-file-size,
 		.att-file-dl {
 			color: rgba(255, 255, 255, 0.4);
+		}
+		.action-trigger {
+			color: rgba(255, 255, 255, 0.45);
+		}
+		.action-trigger:hover {
+			background: rgba(255, 255, 255, 0.1);
+			color: #ffffff;
+		}
+		.action-menu {
+			background: #2e2e3a;
+			border-color: rgba(255, 255, 255, 0.1);
+			box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+		}
+		.action-menu button {
+			color: #e8e8ea;
+		}
+		.action-menu button:hover {
+			background: rgba(255, 255, 255, 0.08);
+		}
+		.action-menu button.danger {
+			color: #ff8a90;
+		}
+		.action-menu button.danger:hover {
+			background: rgba(255, 138, 144, 0.12);
+		}
+		.reply-quote {
+			background: rgba(255, 255, 255, 0.06);
+		}
+		.reply-quote-text {
+			color: rgba(255, 255, 255, 0.5);
 		}
 	}
 </style>

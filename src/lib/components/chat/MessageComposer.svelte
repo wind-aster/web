@@ -27,7 +27,24 @@
 
 	const uploading = $derived(pending.some((p) => p.status === 'uploading'));
 	const ready = $derived(pending.filter((p) => p.status === 'done'));
-	const canSend = $derived(!uploading && (inputText.trim().length > 0 || ready.length > 0));
+	const isEditing = $derived(chat.editingId !== null);
+	const canSend = $derived(
+		isEditing
+			? inputText.trim().length > 0
+			: !uploading && (inputText.trim().length > 0 || ready.length > 0)
+	);
+
+	// Prefill the input when entering edit mode; clear it when leaving (submit/cancel).
+	let wasEditing = false;
+	$effect(() => {
+		const editing = chat.editingId !== null;
+		if (editing && !wasEditing) {
+			inputText = chat.editingText;
+		} else if (!editing && wasEditing) {
+			inputText = '';
+		}
+		wasEditing = editing;
+	});
 
 	function pickFiles() {
 		fileInput?.click();
@@ -64,7 +81,7 @@
 
 	function addFiles(files: File[]) {
 		const chatId = chat.selectedChatId;
-		if (chatId === null || !auth.token) return;
+		if (chatId === null || !auth.token || isEditing) return;
 
 		for (const file of files) {
 			const cap = isVideo(file) ? MAX_VIDEO_SIZE : MAX_UPLOAD_SIZE;
@@ -144,14 +161,40 @@
 	}
 
 	async function send() {
+		// Edit mode: submit the edit instead of sending a new message.
+		if (isEditing) {
+			await chat.submitEdit(inputText); // input cleared by the edit-mode effect
+			return;
+		}
+
 		const text = inputText.trim();
 		const ids = ready.map((p) => p.attachmentId!).filter((id) => id !== undefined);
 		if (!text && ids.length === 0) return;
 		if (uploading) return;
 
-		if (await chat.sendMessage(text, ids)) {
+		if (await chat.sendMessage(text, ids, chat.replyingTo?.id)) {
 			inputText = '';
 			clearPending();
+			chat.cancelReply();
+		}
+	}
+
+	// Display name of the message currently being replied to.
+	function replyName(): string {
+		const msg = chat.replyingTo;
+		if (!msg) return '';
+		const m = chat.selectedChat?.members.find((mm) => mm.id === msg.sender_id);
+		return m?.display_name || m?.username || 'Unknown';
+	}
+
+	// Esc cancels an in-progress reply or edit.
+	function onComposerKeydown(e: KeyboardEvent) {
+		if (e.key === 'Enter' && !e.shiftKey) {
+			e.preventDefault();
+			send();
+		} else if (e.key === 'Escape') {
+			if (isEditing) chat.cancelEdit();
+			else if (chat.replyingTo) chat.cancelReply();
 		}
 	}
 </script>
@@ -185,6 +228,30 @@
 {/if}
 
 <div class="composer" onpaste={handlePaste}>
+	{#if isEditing || chat.replyingTo}
+		<div class="context-bar">
+			<span class="context-accent" aria-hidden="true"></span>
+			<div class="context-body">
+				<span class="context-title">
+					{isEditing ? 'Editing message' : `Reply to ${replyName()}`}
+				</span>
+				<span class="context-snippet">
+					{#if isEditing}
+						{chat.editingText}
+					{:else}
+						{chat.replyingTo?.text || 'Attachment'}
+					{/if}
+				</span>
+			</div>
+			<button
+				class="context-close"
+				onclick={() => (isEditing ? chat.cancelEdit() : chat.cancelReply())}
+				title="Cancel"
+				aria-label="Cancel">×</button
+			>
+		</div>
+	{/if}
+
 	{#if pending.length > 0}
 		<div class="attach-row">
 			{#each pending as p (p.uid)}
@@ -232,32 +299,29 @@
 
 	<div class="input-area">
 		<input bind:this={fileInput} type="file" multiple hidden onchange={handleFiles} />
-		<button class="attach-btn" onclick={pickFiles} title="Attach file" aria-label="Attach file">
-			<svg
-				width="20"
-				height="20"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="2"
-				stroke-linecap="round"
-				stroke-linejoin="round"
-			>
-				<path
-					d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
-				/>
-			</svg>
-		</button>
+		{#if !isEditing}
+			<button class="attach-btn" onclick={pickFiles} title="Attach file" aria-label="Attach file">
+				<svg
+					width="20"
+					height="20"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+				>
+					<path
+						d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
+					/>
+				</svg>
+			</button>
+		{/if}
 		<TextField
-			placeholder="Type a message…"
+			placeholder={isEditing ? 'Edit message…' : 'Type a message…'}
 			bind:value={inputText}
 			style="flex: 1; min-width: 0"
-			onkeydown={(e: KeyboardEvent) => {
-				if (e.key === 'Enter' && !e.shiftKey) {
-					e.preventDefault();
-					send();
-				}
-			}}
+			onkeydown={onComposerKeydown}
 		/>
 		<button
 			class="send-btn"
@@ -289,6 +353,65 @@
 		flex-shrink: 0;
 		border-top: 1px solid rgba(0, 0, 0, 0.08);
 		background: #ffffff;
+	}
+
+	.context-bar {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 8px 16px 0;
+	}
+
+	.context-accent {
+		width: 3px;
+		align-self: stretch;
+		min-height: 30px;
+		border-radius: 2px;
+		background: var(--fluent-accent-primary, #3eb489);
+		flex-shrink: 0;
+	}
+
+	.context-body {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+		flex: 1;
+	}
+
+	.context-title {
+		font-size: 12px;
+		font-weight: 600;
+		color: var(--fluent-accent-primary, #3eb489);
+	}
+
+	.context-snippet {
+		font-size: 12px;
+		color: rgba(0, 0, 0, 0.55);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.context-close {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 24px;
+		height: 24px;
+		flex-shrink: 0;
+		padding: 0;
+		border: none;
+		border-radius: 50%;
+		background: transparent;
+		color: rgba(0, 0, 0, 0.45);
+		font-size: 18px;
+		line-height: 1;
+		cursor: pointer;
+	}
+
+	.context-close:hover {
+		background: rgba(0, 0, 0, 0.08);
+		color: #1f1f1f;
 	}
 
 	.drop-overlay {
@@ -489,6 +612,16 @@
 		.composer {
 			background: #1e1e24;
 			border-top-color: rgba(255, 255, 255, 0.07);
+		}
+		.context-snippet {
+			color: rgba(255, 255, 255, 0.5);
+		}
+		.context-close {
+			color: rgba(255, 255, 255, 0.5);
+		}
+		.context-close:hover {
+			background: rgba(255, 255, 255, 0.1);
+			color: #ffffff;
 		}
 		.drop-hint {
 			background: rgba(30, 30, 36, 0.92);

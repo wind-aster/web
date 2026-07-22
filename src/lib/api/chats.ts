@@ -11,6 +11,12 @@ export interface Attachment {
 	thumb_url?: string;
 }
 
+export interface ReplyPreview {
+	id: number;
+	sender_name: string;
+	text: string;
+}
+
 export interface Message {
 	id: number;
 	sender_id: number;
@@ -18,6 +24,9 @@ export interface Message {
 	text: string;
 	created_at: string;
 	attachments?: Attachment[];
+	reply_to_id?: number;
+	edited_at?: string;
+	reply_preview?: ReplyPreview;
 }
 
 export interface ChatMember {

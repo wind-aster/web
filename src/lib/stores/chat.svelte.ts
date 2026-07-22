@@ -7,7 +7,12 @@ import {
 	type ChatMember,
 	type Message
 } from '$lib/api/chats';
-import { getMessages, sendMessageRest } from '$lib/api/messages';
+import {
+	getMessages,
+	sendMessageRest,
+	editMessage as apiEditMessage,
+	deleteMessage as apiDeleteMessage
+} from '$lib/api/messages';
 import { getUsers } from '$lib/api/users';
 import { connectWS, sendWS, disconnectWS } from '$lib/api/ws';
 import { ensureFreshAccess } from '$lib/api/client';
@@ -26,6 +31,11 @@ function createChatStore() {
 	let loadingMessages = $state(false);
 	let hasMoreOlder = $state(false);
 	let loadingOlder = $state(false);
+
+	// Composer intent: replying to / editing an existing message (mutually exclusive).
+	let replyingTo = $state<Message | null>(null);
+	let editingId = $state<number | null>(null);
+	let editingText = $state('');
 
 	// User search / new chat panel
 	let panelMode = $state<'none' | 'dm' | 'group'>('none');
@@ -97,24 +107,30 @@ function createChatStore() {
 		}
 	}
 
-	async function sendMessage(rawText: string, attachmentIds: number[] = []): Promise<boolean> {
+	async function sendMessage(
+		rawText: string,
+		attachmentIds: number[] = [],
+		replyToId?: number
+	): Promise<boolean> {
 		const text = rawText.trim();
 		if ((!text && attachmentIds.length === 0) || selectedChatId === null) return false;
 		const chatId = selectedChatId;
 
-		if (sendWS(chatId, text, attachmentIds)) return true;
+		if (sendWS(chatId, text, attachmentIds, replyToId)) return true;
 
 		// WS not connected — fall back to REST and add optimistically.
 		if (!auth.token) return false;
 		try {
-			const res = await sendMessageRest(chatId, text, attachmentIds);
+			const res = await sendMessageRest(chatId, text, attachmentIds, replyToId);
 			const sentMsg: Message = {
 				id: res.message_id,
 				sender_id: auth.userId ?? 0,
 				chat_id: chatId,
 				text,
 				created_at: res.created_at,
-				attachments: res.attachments
+				attachments: res.attachments,
+				reply_to_id: replyToId,
+				reply_preview: res.reply_preview
 			};
 			if (selectedChatId === chatId) messages = [...messages, sentMsg];
 			chats = chats.map((c) =>
@@ -124,6 +140,52 @@ function createChatStore() {
 		} catch (e) {
 			console.error('Send failed', e);
 			return false;
+		}
+	}
+
+	// --- Reply / edit intent -------------------------------------------------
+
+	function startReply(msg: Message) {
+		cancelEdit();
+		replyingTo = msg;
+	}
+	function cancelReply() {
+		replyingTo = null;
+	}
+
+	function startEdit(msg: Message) {
+		cancelReply();
+		editingId = msg.id;
+		editingText = msg.text;
+	}
+	function cancelEdit() {
+		editingId = null;
+		editingText = '';
+	}
+
+	// Submit an edit for the message currently in edit mode. Optimistically
+	// updates locally; the broadcast reconciles for every client.
+	async function submitEdit(rawText: string): Promise<boolean> {
+		const text = rawText.trim();
+		const id = editingId;
+		if (id === null || !text) return false;
+		try {
+			const updated = await apiEditMessage(id, text);
+			applyUpdatedMessage(updated);
+			cancelEdit();
+			return true;
+		} catch (e) {
+			console.error('Edit failed', e);
+			return false;
+		}
+	}
+
+	async function removeMessage(id: number): Promise<void> {
+		try {
+			await apiDeleteMessage(id);
+			applyDeletedMessage(selectedChatId ?? -1, id);
+		} catch (e) {
+			console.error('Delete failed', e);
 		}
 	}
 
@@ -208,6 +270,37 @@ function createChatStore() {
 		}
 	}
 
+	// Replace a message in the open thread and refresh the sidebar preview.
+	function applyUpdatedMessage(msg: Message) {
+		if (msg.chat_id === selectedChatId) {
+			messages = messages.map((m) => (m.id === msg.id ? msg : m));
+		}
+		chats = chats.map((c) =>
+			c.id === msg.chat_id
+				? { ...c, last_messages: c.last_messages.map((m) => (m.id === msg.id ? msg : m)) }
+				: c
+		);
+	}
+
+	// Remove a message from the open thread; if it was a sidebar preview, resync.
+	function applyDeletedMessage(chatId: number, id: number) {
+		if (chatId === selectedChatId) {
+			messages = messages.filter((m) => m.id !== id);
+		}
+		// If the deleted message was a chat's last message, recompute the preview.
+		if (chats.some((c) => c.last_messages.some((m) => m.id === id))) {
+			refreshChats();
+		}
+	}
+
+	function onMessageUpdated(msg: Message) {
+		applyUpdatedMessage(msg);
+	}
+
+	function onMessageDeleted(chatId: number, id: number) {
+		applyDeletedMessage(chatId, id);
+	}
+
 	function onReconnected() {
 		// Reconnected after a drop — resync anything missed while offline.
 		refreshChats();
@@ -226,7 +319,7 @@ function createChatStore() {
 		getChats().then((data) => {
 			chats = data ?? [];
 		});
-		connectWS(ensureFreshAccess, onMessage, onReconnected);
+		connectWS(ensureFreshAccess, { onMessage, onMessageUpdated, onMessageDeleted }, onReconnected);
 	}
 
 	function stop() {
@@ -259,6 +352,21 @@ function createChatStore() {
 			return loadingOlder;
 		},
 		loadOlder,
+		get replyingTo() {
+			return replyingTo;
+		},
+		get editingId() {
+			return editingId;
+		},
+		get editingText() {
+			return editingText;
+		},
+		startReply,
+		cancelReply,
+		startEdit,
+		cancelEdit,
+		submitEdit,
+		removeMessage,
 		get panelMode() {
 			return panelMode;
 		},
