@@ -1,13 +1,14 @@
 import { browser } from '$app/environment';
 import type { AuthUser } from '$lib/api/auth';
 
-const TOKEN_KEY = 'windaster_token';
+const ACCESS_KEY = 'windaster_access';
+const REFRESH_KEY = 'windaster_refresh';
 const USER_KEY = 'windaster_user';
 
 function getUserIdFromToken(token: string): number | null {
 	try {
 		const payload = JSON.parse(atob(token.split('.')[1]));
-		return typeof payload.UserID === 'number' ? payload.UserID : null;
+		return typeof payload.user_id === 'number' ? payload.user_id : null;
 	} catch {
 		return null;
 	}
@@ -24,35 +25,58 @@ function loadStoredUser(): AuthUser | null {
 }
 
 function createAuthStore() {
-	let token = $state<string | null>(browser ? localStorage.getItem(TOKEN_KEY) : null);
+	let accessToken = $state<string | null>(browser ? localStorage.getItem(ACCESS_KEY) : null);
+	let refreshToken = $state<string | null>(browser ? localStorage.getItem(REFRESH_KEY) : null);
 	let user = $state<AuthUser | null>(loadStoredUser());
+
+	// A session is only valid if we hold a refresh token — pre-Batch-B sessions
+	// (access token only) are treated as logged out and must re-login once.
+	if (browser && !refreshToken) {
+		accessToken = null;
+		user = null;
+	}
 
 	return {
 		get token() {
-			return token;
+			return accessToken;
+		},
+		get refreshToken() {
+			return refreshToken;
 		},
 		get user() {
 			return user;
 		},
 		get userId(): number | null {
-			return user?.id ?? (token ? getUserIdFromToken(token) : null);
+			return user?.id ?? (accessToken ? getUserIdFromToken(accessToken) : null);
 		},
 		get isAuthenticated() {
-			return token !== null;
+			return accessToken !== null && refreshToken !== null;
 		},
-		login(newToken: string, newUser: AuthUser) {
-			token = newToken;
+		login(access: string, refresh: string, newUser: AuthUser) {
+			accessToken = access;
+			refreshToken = refresh;
 			user = newUser;
 			if (browser) {
-				localStorage.setItem(TOKEN_KEY, newToken);
+				localStorage.setItem(ACCESS_KEY, access);
+				localStorage.setItem(REFRESH_KEY, refresh);
 				localStorage.setItem(USER_KEY, JSON.stringify(newUser));
 			}
 		},
+		setTokens(access: string, refresh: string) {
+			accessToken = access;
+			refreshToken = refresh;
+			if (browser) {
+				localStorage.setItem(ACCESS_KEY, access);
+				localStorage.setItem(REFRESH_KEY, refresh);
+			}
+		},
 		logout() {
-			token = null;
+			accessToken = null;
+			refreshToken = null;
 			user = null;
 			if (browser) {
-				localStorage.removeItem(TOKEN_KEY);
+				localStorage.removeItem(ACCESS_KEY);
+				localStorage.removeItem(REFRESH_KEY);
 				localStorage.removeItem(USER_KEY);
 			}
 		}

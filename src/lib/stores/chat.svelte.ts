@@ -10,6 +10,7 @@ import {
 import { getMessages, sendMessageRest } from '$lib/api/messages';
 import { getUsers } from '$lib/api/users';
 import { connectWS, sendWS, disconnectWS } from '$lib/api/ws';
+import { ensureFreshAccess } from '$lib/api/client';
 
 function lastActivity(chat: ChatDetail): number {
 	const last = chat.last_messages.at(-1);
@@ -56,7 +57,7 @@ function createChatStore() {
 
 	async function refreshChats() {
 		if (!auth.token) return;
-		chats = (await getChats(auth.token)) ?? [];
+		chats = (await getChats()) ?? [];
 	}
 
 	async function selectChat(id: number) {
@@ -67,7 +68,7 @@ function createChatStore() {
 		loadingMessages = true;
 		try {
 			if (auth.token) {
-				const data = await getMessages(auth.token, id, PAGE);
+				const data = await getMessages(id, PAGE);
 				// Guard against a stale fetch resolving after the user switched chats.
 				if (selectedChatId === id) {
 					messages = data ?? [];
@@ -87,7 +88,7 @@ function createChatStore() {
 		if (before === undefined) return;
 		loadingOlder = true;
 		try {
-			const older = await getMessages(auth.token, chatId, PAGE, before);
+			const older = await getMessages(chatId, PAGE, before);
 			if (selectedChatId !== chatId) return; // switched away mid-fetch
 			if (older && older.length > 0) messages = [...older, ...messages];
 			hasMoreOlder = (older?.length ?? 0) === PAGE;
@@ -106,7 +107,7 @@ function createChatStore() {
 		// WS not connected — fall back to REST and add optimistically.
 		if (!auth.token) return false;
 		try {
-			const res = await sendMessageRest(auth.token, chatId, text, attachmentIds);
+			const res = await sendMessageRest(chatId, text, attachmentIds);
 			const sentMsg: Message = {
 				id: res.message_id,
 				sender_id: auth.userId ?? 0,
@@ -129,7 +130,7 @@ function createChatStore() {
 	function loadUsers() {
 		if (allUsers.length === 0 && auth.token) {
 			usersLoading = true;
-			getUsers(auth.token)
+			getUsers()
 				.then((data) => {
 					allUsers = data ?? [];
 				})
@@ -157,7 +158,7 @@ function createChatStore() {
 		}
 
 		if (!auth.token || auth.userId === null) return;
-		const chatId = await createChat(auth.token, user.username, 'direct', [auth.userId, user.id]);
+		const chatId = await createChat(user.username, 'direct', [auth.userId, user.id]);
 		await refreshChats();
 		closePanel();
 		selectChat(chatId);
@@ -179,7 +180,7 @@ function createChatStore() {
 		const name = groupName.trim();
 		if (!name || groupSelected.length === 0 || !auth.token || auth.userId === null) return;
 		const ids = [auth.userId, ...groupSelected.map((u) => u.id)];
-		const chatId = await createChat(auth.token, name, 'group', ids);
+		const chatId = await createChat(name, 'group', ids);
 		await refreshChats();
 		closePanel();
 		selectChat(chatId);
@@ -212,7 +213,7 @@ function createChatStore() {
 		refreshChats();
 		if (selectedChatId !== null && auth.token) {
 			const id = selectedChatId;
-			getMessages(auth.token, id, PAGE).then((data) => {
+			getMessages(id, PAGE).then((data) => {
 				if (selectedChatId === id) {
 					messages = data ?? [];
 					hasMoreOlder = (data?.length ?? 0) === PAGE;
@@ -221,11 +222,11 @@ function createChatStore() {
 		}
 	}
 
-	function start(token: string) {
-		getChats(token).then((data) => {
+	function start() {
+		getChats().then((data) => {
 			chats = data ?? [];
 		});
-		connectWS(token, onMessage, onReconnected);
+		connectWS(ensureFreshAccess, onMessage, onReconnected);
 	}
 
 	function stop() {

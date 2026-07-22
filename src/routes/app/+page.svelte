@@ -2,6 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { auth } from '$lib/stores/auth.svelte';
+	import { logout as apiLogout } from '$lib/api/auth';
 	import { chat } from '$lib/stores/chat.svelte';
 	import Sidebar from '$lib/components/chat/Sidebar.svelte';
 	import ChatHeader from '$lib/components/chat/ChatHeader.svelte';
@@ -16,11 +17,13 @@
 	$effect(() => {
 		const token = auth.token;
 		if (!token) return;
-		chat.start(token);
+		chat.start();
 		return () => chat.stop();
 	});
 
 	function handleLogout() {
+		const rt = auth.refreshToken;
+		if (rt) apiLogout(rt); // best-effort server-side revoke
 		auth.logout();
 		goto(resolve('/login'), { replaceState: true });
 	}

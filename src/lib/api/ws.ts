@@ -6,29 +6,40 @@ const WS_BASE = import.meta.env.VITE_API_URL
 	? import.meta.env.VITE_API_URL.replace(/^http/, 'ws')
 	: `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`;
 
+type TokenProvider = () => Promise<string | null>;
+
 let socket: WebSocket | null = null;
 let handler: MessageHandler | null = null;
 let onReconnected: (() => void) | null = null;
-let token: string | null = null;
+let getToken: TokenProvider | null = null;
 let reconnectAttempts = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let manualClose = false;
 
-export function connectWS(t: string, onMessage: MessageHandler, onReconnect?: () => void): void {
+export function connectWS(
+	provider: TokenProvider,
+	onMessage: MessageHandler,
+	onReconnect?: () => void
+): void {
 	manualClose = false;
 	reconnectAttempts = 0;
-	token = t;
+	getToken = provider;
 	handler = onMessage;
 	onReconnected = onReconnect ?? null;
 	open();
 }
 
-function open(): void {
+async function open(): Promise<void> {
 	if (reconnectTimer) {
 		clearTimeout(reconnectTimer);
 		reconnectTimer = null;
 	}
-	if (!token) return;
+	if (!getToken) return;
+
+	// Fetch a fresh access token each (re)connect so rotation doesn't leave us
+	// opening the socket with a stale, expired token.
+	const token = await getToken();
+	if (!token || manualClose) return;
 
 	socket = new WebSocket(`${WS_BASE}/api/ws?token=${token}`);
 
@@ -59,7 +70,7 @@ function open(): void {
 }
 
 function scheduleReconnect(): void {
-	if (manualClose || token === null) return;
+	if (manualClose || getToken === null) return;
 	const delay = Math.min(30000, 1000 * 2 ** reconnectAttempts);
 	reconnectAttempts++;
 	reconnectTimer = setTimeout(open, delay);
@@ -80,7 +91,7 @@ export function disconnectWS(): void {
 	reconnectAttempts = 0;
 	handler = null;
 	onReconnected = null;
-	token = null;
+	getToken = null;
 	socket?.close();
 	socket = null;
 }

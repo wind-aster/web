@@ -93,7 +93,7 @@
 				);
 			};
 
-			uploadFile(auth.token, chatId, file, onProgress, controller.signal)
+			uploadFile(chatId, file, onProgress, controller.signal)
 				.then((res) => {
 					pending = pending.map((p) =>
 						p.uid === entry.uid ? { ...p, status: 'done', attachmentId: res.attachmentId } : p

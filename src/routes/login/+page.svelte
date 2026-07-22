@@ -3,6 +3,7 @@
 	import { login as apiLogin } from '$lib/api/auth';
 	import { auth } from '$lib/stores/auth.svelte';
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 
 	let identifier = $state('');
 	let password = $state('');
@@ -14,8 +15,8 @@
 		loading = true;
 		try {
 			const res = await apiLogin(identifier, password);
-			auth.login(res.token, res.user);
-			goto('/app', { replaceState: true });
+			auth.login(res.access_token, res.refresh_token, res.user);
+			goto(resolve('/app'), { replaceState: true });
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Login failed';
 		} finally {
@@ -66,7 +67,7 @@
 			{loading ? 'Signing in…' : 'Sign in'}
 		</Button>
 
-		<p class="switch">Don't have an account? <a href="/register">Register</a></p>
+		<p class="switch">Don't have an account? <a href={resolve('/register')}>Register</a></p>
 	</div>
 </div>
 

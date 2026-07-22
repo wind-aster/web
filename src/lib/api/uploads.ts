@@ -1,8 +1,7 @@
+import { authFetch } from './client';
 import type { Attachment } from './chats';
 import { isImage, compressImage, makeThumbnail } from '$lib/utils/image';
 import { isVideo, compressVideo } from '$lib/utils/video';
-
-const API_BASE = import.meta.env.VITE_API_URL ?? '';
 
 /** Max upload size in bytes — keep in sync with the backend limits. */
 export const MAX_UPLOAD_SIZE = 26214400; // 25 MiB (general files)
@@ -37,13 +36,10 @@ export interface UploadedAttachment {
 	height?: number;
 }
 
-async function createUpload(token: string, meta: CreateUploadMeta): Promise<CreateUploadResp> {
-	const res = await fetch(`${API_BASE}/api/uploads`, {
+async function createUpload(meta: CreateUploadMeta): Promise<CreateUploadResp> {
+	const res = await authFetch(`/api/uploads`, {
 		method: 'POST',
-		headers: {
-			Authorization: `Bearer ${token}`,
-			'Content-Type': 'application/json'
-		},
+		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify(meta)
 	});
 	if (!res.ok) throw new Error('Failed to create upload');
@@ -76,7 +72,6 @@ function throwIfAborted(signal?: AbortSignal): void {
  * and return the reserved attachment id plus metadata for optimistic display.
  */
 export async function uploadFile(
-	token: string,
 	chatId: number,
 	file: File,
 	onProgress?: UploadProgress,
@@ -114,7 +109,7 @@ export async function uploadFile(
 	throwIfAborted(signal); // e.g. cancelled during video transcode
 	onProgress?.('uploading');
 
-	const res = await createUpload(token, {
+	const res = await createUpload({
 		chat_id: chatId,
 		filename,
 		mime_type: mimeType,
@@ -141,10 +136,8 @@ export async function uploadFile(
 }
 
 /** Refresh presigned URLs for a single attachment (e.g. after link expiry). */
-export async function getFile(token: string, id: number): Promise<Attachment> {
-	const res = await fetch(`${API_BASE}/api/files/${id}`, {
-		headers: { Authorization: `Bearer ${token}` }
-	});
+export async function getFile(id: number): Promise<Attachment> {
+	const res = await authFetch(`/api/files/${id}`);
 	if (!res.ok) throw new Error('Failed to fetch file');
 	return res.json();
 }

@@ -36,7 +36,7 @@
 		if (retried.has(id) || !auth.token) return;
 		retried.add(id);
 		try {
-			const a = await getFile(auth.token, id);
+			const a = await getFile(id);
 			refreshed = { ...refreshed, [id]: { url: a.url, thumb_url: a.thumb_url } };
 		} catch {
 			// leave broken; a later reload will retry with a fresh page load
