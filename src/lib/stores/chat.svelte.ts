@@ -3,6 +3,7 @@ import { SYSTEM_USER_ID } from '$lib/constants';
 import {
 	getChats,
 	createChat,
+	markChatRead,
 	type ChatDetail,
 	type ChatMember,
 	type Message
@@ -11,10 +12,12 @@ import {
 	getMessages,
 	sendMessageRest,
 	editMessage as apiEditMessage,
-	deleteMessage as apiDeleteMessage
+	deleteMessage as apiDeleteMessage,
+	toggleReaction as apiToggleReaction
 } from '$lib/api/messages';
+import type { Reaction } from '$lib/api/chats';
 import { getUsers } from '$lib/api/users';
-import { connectWS, sendWS, disconnectWS } from '$lib/api/ws';
+import { connectWS, sendWS, sendTypingWS, disconnectWS } from '$lib/api/ws';
 import { ensureFreshAccess } from '$lib/api/client';
 
 function lastActivity(chat: ChatDetail): number {
@@ -36,6 +39,17 @@ function createChatStore() {
 	let replyingTo = $state<Message | null>(null);
 	let editingId = $state<number | null>(null);
 	let editingText = $state('');
+
+	// Highest message id we've already reported as read per chat (dedupes POSTs).
+	const lastReadSent: Record<number, number> = {};
+
+	// Presence (userId -> online/last_seen) and typing (chatId -> userIds typing).
+	let presence = $state<Record<number, { online: boolean; last_seen?: string }>>({});
+	let typing = $state<Record<number, number[]>>({});
+	// Non-reactive bookkeeping for typing expiry + outgoing throttle.
+	const typingTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+	let typingSentAt = 0;
+	let typingStopTimer: ReturnType<typeof setTimeout> | null = null;
 
 	// User search / new chat panel
 	let panelMode = $state<'none' | 'dm' | 'group'>('none');
@@ -65,17 +79,38 @@ function createChatStore() {
 		});
 	});
 
+	// Seed the presence map from chat members returned by the server.
+	function seedPresence(list: ChatDetail[]) {
+		const next = { ...presence };
+		for (const c of list) {
+			for (const m of c.members) {
+				if (m.online !== undefined || m.last_seen !== undefined) {
+					next[m.id] = { online: !!m.online, last_seen: m.last_seen };
+				}
+			}
+		}
+		presence = next;
+	}
+
 	async function refreshChats() {
 		if (!auth.token) return;
 		chats = (await getChats()) ?? [];
+		seedPresence(chats);
 	}
 
 	async function selectChat(id: number) {
 		if (selectedChatId === id) return;
+		stopTyping(); // stop announcing typing in the chat we're leaving
 		selectedChatId = id;
 		messages = [];
 		hasMoreOlder = false;
 		loadingMessages = true;
+		// Opening a chat clears its badge immediately; the read receipt POST is
+		// sent by the thread's visibility-gated trigger. Guard the reassignment so
+		// we don't churn `chats` (and re-run the read effect) when already zero.
+		if (chats.some((c) => c.id === id && c.unread_count !== 0)) {
+			chats = chats.map((c) => (c.id === id ? { ...c, unread_count: 0 } : c));
+		}
 		try {
 			if (auth.token) {
 				const data = await getMessages(id, PAGE);
@@ -189,6 +224,126 @@ function createChatStore() {
 		}
 	}
 
+	// --- Read state ----------------------------------------------------------
+
+	// Report that we've read up to messageId in a chat (deduped), and clear its
+	// unread badge locally. Fire-and-forget; the server broadcasts read_status.
+	function markRead(chatId: number, messageId: number) {
+		// Clear the local badge, but only reassign `chats` when something actually
+		// changes: this runs from a $effect that reads `chats`, so an unconditional
+		// reassignment (Array.map always returns a new array) would retrigger the
+		// effect endlessly (effect_update_depth_exceeded).
+		const c = chats.find((x) => x.id === chatId);
+		if (c && c.unread_count !== 0) {
+			chats = chats.map((x) => (x.id === chatId ? { ...x, unread_count: 0 } : x));
+		}
+		if (!auth.token || messageId <= (lastReadSent[chatId] ?? 0)) return;
+		lastReadSent[chatId] = messageId;
+		markChatRead(chatId, messageId).catch((e) => console.error('markRead failed', e));
+	}
+
+	// Apply a member's read/delivered pointers (from a read_status broadcast).
+	function applyReadStatus(
+		chatId: number,
+		userId: number,
+		lastRead: number,
+		lastDelivered: number
+	) {
+		chats = chats.map((c) => {
+			if (c.id !== chatId) return c;
+			const existing = c.member_status.find((s) => s.user_id === userId);
+			const next = existing
+				? c.member_status.map((s) =>
+						s.user_id === userId
+							? {
+									user_id: userId,
+									last_read: Math.max(s.last_read, lastRead),
+									last_delivered: Math.max(s.last_delivered, lastDelivered)
+								}
+							: s
+					)
+				: [
+						...c.member_status,
+						{ user_id: userId, last_read: lastRead, last_delivered: lastDelivered }
+					];
+			return { ...c, member_status: next };
+		});
+	}
+
+	function onReadStatus(chatId: number, userId: number, lastRead: number, lastDelivered: number) {
+		applyReadStatus(chatId, userId, lastRead, lastDelivered);
+	}
+
+	// --- Presence + typing ---------------------------------------------------
+
+	function presenceFor(userId: number): { online: boolean; last_seen?: string } {
+		return presence[userId] ?? { online: false };
+	}
+
+	function onPresence(userId: number, online: boolean, lastSeen?: string) {
+		presence = { ...presence, [userId]: { online, last_seen: lastSeen } };
+	}
+
+	function typingUserIds(chatId: number): number[] {
+		return typing[chatId] ?? [];
+	}
+
+	function onTyping(chatId: number, userId: number, isTyping: boolean) {
+		if (userId === auth.userId) return; // ignore our own echo
+		const key = `${chatId}:${userId}`;
+		if (typingTimers[key]) {
+			clearTimeout(typingTimers[key]);
+			delete typingTimers[key];
+		}
+		const current = typing[chatId] ?? [];
+		if (isTyping) {
+			if (!current.includes(userId)) typing = { ...typing, [chatId]: [...current, userId] };
+			// Auto-expire if no refresh arrives within 5s.
+			typingTimers[key] = setTimeout(() => {
+				const list = (typing[chatId] ?? []).filter((id) => id !== userId);
+				typing = { ...typing, [chatId]: list };
+				delete typingTimers[key];
+			}, 5000);
+		} else {
+			typing = { ...typing, [chatId]: current.filter((id) => id !== userId) };
+		}
+	}
+
+	// Signal that we're typing in the open chat (throttled to ~1 event / 3s),
+	// with an idle timer that sends "stopped" after ~4s of no keystrokes.
+	function notifyTyping() {
+		if (selectedChatId === null) return;
+		const chatId = selectedChatId;
+		const now = Date.now();
+		if (now - typingSentAt > 3000) {
+			sendTypingWS(chatId, true);
+			typingSentAt = now;
+		}
+		if (typingStopTimer) clearTimeout(typingStopTimer);
+		typingStopTimer = setTimeout(() => stopTyping(), 4000);
+	}
+
+	function stopTyping() {
+		if (typingStopTimer) {
+			clearTimeout(typingStopTimer);
+			typingStopTimer = null;
+		}
+		if (typingSentAt === 0) return; // never announced typing
+		typingSentAt = 0;
+		if (selectedChatId !== null) sendTypingWS(selectedChatId, false);
+	}
+
+	// Add/remove the current user's reaction. Applies the server's authoritative
+	// aggregate immediately; the broadcast reconciles everyone else (idempotent).
+	async function toggleReaction(msg: Message, emoji: string): Promise<void> {
+		try {
+			const res = await apiToggleReaction(msg.id, emoji);
+			applyReactions(msg.chat_id, msg.id, res.reactions);
+		} catch (e) {
+			console.error('Reaction failed', e);
+		}
+	}
+
 	function loadUsers() {
 		if (allUsers.length === 0 && auth.token) {
 			usersLoading = true;
@@ -261,8 +416,20 @@ function createChatStore() {
 			messages = [...messages, msg];
 		}
 		if (chats.some((c) => c.id === msg.chat_id)) {
+			// The open chat never accrues a badge (its messages are on screen); only
+			// other chats, and only for others' non-system messages.
+			const bumpUnread =
+				msg.chat_id !== selectedChatId &&
+				msg.sender_id !== auth.userId &&
+				msg.sender_id !== SYSTEM_USER_ID;
 			chats = chats.map((c) =>
-				c.id === msg.chat_id ? { ...c, last_messages: [...c.last_messages.slice(-4), msg] } : c
+				c.id === msg.chat_id
+					? {
+							...c,
+							last_messages: [...c.last_messages.slice(-4), msg],
+							unread_count: bumpUnread ? c.unread_count + 1 : c.unread_count
+						}
+					: c
 			);
 		} else {
 			// Message for a chat we aren't tracking yet (new DM/group) — pull it in.
@@ -293,12 +460,23 @@ function createChatStore() {
 		}
 	}
 
+	// Replace a message's reactions in the open thread (sidebar preview unaffected).
+	function applyReactions(chatId: number, id: number, reactions: Reaction[]) {
+		if (chatId === selectedChatId) {
+			messages = messages.map((m) => (m.id === id ? { ...m, reactions } : m));
+		}
+	}
+
 	function onMessageUpdated(msg: Message) {
 		applyUpdatedMessage(msg);
 	}
 
 	function onMessageDeleted(chatId: number, id: number) {
 		applyDeletedMessage(chatId, id);
+	}
+
+	function onMessageReaction(chatId: number, id: number, reactions: Reaction[]) {
+		applyReactions(chatId, id, reactions);
 	}
 
 	function onReconnected() {
@@ -318,8 +496,21 @@ function createChatStore() {
 	function start() {
 		getChats().then((data) => {
 			chats = data ?? [];
+			seedPresence(chats);
 		});
-		connectWS(ensureFreshAccess, { onMessage, onMessageUpdated, onMessageDeleted }, onReconnected);
+		connectWS(
+			ensureFreshAccess,
+			{
+				onMessage,
+				onMessageUpdated,
+				onMessageDeleted,
+				onMessageReaction,
+				onReadStatus,
+				onPresence,
+				onTyping
+			},
+			onReconnected
+		);
 	}
 
 	function stop() {
@@ -367,6 +558,12 @@ function createChatStore() {
 		cancelEdit,
 		submitEdit,
 		removeMessage,
+		toggleReaction,
+		markRead,
+		presenceFor,
+		typingUserIds,
+		notifyTyping,
+		stopTyping,
 		get panelMode() {
 			return panelMode;
 		},

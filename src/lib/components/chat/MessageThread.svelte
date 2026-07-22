@@ -1,18 +1,43 @@
 <script lang="ts">
 	import { auth } from '$lib/stores/auth.svelte';
 	import { chat } from '$lib/stores/chat.svelte';
-	import { SYSTEM_USER_ID } from '$lib/constants';
+	import { SYSTEM_USER_ID, QUICK_REACTIONS } from '$lib/constants';
 	import { formatTime, formatBytes, sameDay, formatDaySeparator } from '$lib/utils/format';
 	import { getAvatarColor } from '$lib/utils/avatar';
 	import { getFile } from '$lib/api/uploads';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { Dialog } from 'svelte-fluentui';
 	import MediaViewer, { type MediaItem } from './MediaViewer.svelte';
-	import type { Message, Attachment } from '$lib/api/chats';
+	import type { Message, Attachment, Reaction, MemberStatus } from '$lib/api/chats';
 
-	// Which message's action menu is open, and which is pending delete confirmation.
-	let menuFor = $state<number | null>(null);
+	// The open right-click action menu (target message + cursor coords), its
+	// clamped on-screen position, and which message is pending delete confirmation.
+	let menu = $state<{ msg: Message; x: number; y: number } | null>(null);
+	let menuEl = $state<HTMLElement | null>(null);
+	let menuPos = $state<{ x: number; y: number } | null>(null);
 	let confirmDeleteId = $state<number | null>(null);
+
+	// Keep the menu fully on-screen: measure it, then clamp/flip within the viewport.
+	$effect(() => {
+		if (!menu || !menuEl) {
+			menuPos = null;
+			return;
+		}
+		const w = menuEl.offsetWidth;
+		const h = menuEl.offsetHeight;
+		const x = Math.max(8, Math.min(menu.x, window.innerWidth - w - 8));
+		const y = Math.max(8, Math.min(menu.y, window.innerHeight - h - 8));
+		menuPos = { x, y };
+	});
+
+	function openMenu(e: MouseEvent, msg: Message) {
+		e.preventDefault();
+		menu = { msg, x: e.clientX, y: e.clientY };
+	}
+
+	function onWindowKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape') menu = null;
+	}
 
 	function isImageAttachment(att: Attachment): boolean {
 		return att.mime_type.startsWith('image/');
@@ -75,23 +100,75 @@
 		if (idx >= 0) viewerIndex = idx;
 	}
 
-	function toggleMenu(id: number) {
-		menuFor = menuFor === id ? null : id;
-	}
-
 	function doReply(msg: Message) {
 		chat.startReply(msg);
-		menuFor = null;
+		menu = null;
 	}
 
 	function doEdit(msg: Message) {
 		chat.startEdit(msg);
-		menuFor = null;
+		menu = null;
 	}
 
 	function doDelete(msg: Message) {
 		confirmDeleteId = msg.id;
-		menuFor = null;
+		menu = null;
+	}
+
+	function doReact(msg: Message, emoji: string) {
+		chat.toggleReaction(msg, emoji);
+		menu = null;
+	}
+
+	// Whether the current user is among those who added a given emoji.
+	function iReacted(r: Reaction): boolean {
+		return auth.userId !== null && r.user_ids.includes(auth.userId);
+	}
+
+	// Whether the current user has reacted to a message with a specific emoji
+	// (used to highlight the picker row).
+	function reactedWith(msg: Message, emoji: string): boolean {
+		return !!msg.reactions?.some((r) => r.emoji === emoji && iReacted(r));
+	}
+
+	// Mark the open chat read up to its latest message — only when the window is
+	// focused, so a background tab doesn't silently clear "unread".
+	function markReadLatest() {
+		const id = chat.selectedChatId;
+		const last = chat.messages.at(-1);
+		// Gate on tab visibility (not focus) so a visible-but-unfocused window
+		// — e.g. two windows side by side — still registers the read.
+		if (
+			id !== null &&
+			last &&
+			typeof document !== 'undefined' &&
+			document.visibilityState === 'visible'
+		) {
+			chat.markRead(id, last.id);
+		}
+	}
+
+	$effect(() => {
+		// markReadLatest reads chat.selectedChatId + chat.messages, so this effect
+		// re-runs on chat switch and on every new message.
+		markReadLatest();
+	});
+
+	// The other participant's read/delivered pointers (DMs only; groups deferred).
+	function otherStatus(): MemberStatus | null {
+		const c = chat.selectedChat;
+		if (!c || c.type !== 'direct') return null;
+		return c.member_status.find((s) => s.user_id !== auth.userId) ?? null;
+	}
+
+	// Delivery/read state of one of my sent messages (null = no tick, e.g. groups).
+	function msgStatus(msg: Message): 'sent' | 'delivered' | 'read' | null {
+		if (!isMine(msg) || isSystem(msg)) return null;
+		const os = otherStatus();
+		if (!os) return null;
+		if (os.last_read >= msg.id) return 'read';
+		if (os.last_delivered >= msg.id) return 'delivered';
+		return 'sent';
 	}
 
 	// Scroll to a still-loaded message (e.g. clicking a reply quote). Best-effort:
@@ -136,6 +213,8 @@
 	let prevTop = 0;
 
 	function onScroll() {
+		// A fixed-position menu would detach from its message on scroll — close it.
+		if (menu) menu = null;
 		if (!el || pendingPrepend || chat.loadingOlder || !chat.hasMoreOlder) return;
 		if (el.scrollTop <= 80) {
 			pendingPrepend = true;
@@ -165,7 +244,13 @@
 	});
 </script>
 
-<svelte:window onclick={() => (menuFor = null)} />
+<svelte:window
+	onclick={() => (menu = null)}
+	onkeydown={onWindowKeydown}
+	onresize={() => (menu = null)}
+	onfocus={markReadLatest}
+/>
+<svelte:document onvisibilitychange={markReadLatest} />
 
 <div class="messages" bind:this={el} onscroll={onScroll}>
 	{#if chat.loadingMessages}
@@ -183,7 +268,13 @@
 			{#if isSystem(msg)}
 				<div class="system-notice">{msg.text}</div>
 			{:else}
-				<div class="message-row" class:mine={isMine(msg)} data-mid={msg.id}>
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<div
+					class="message-row"
+					class:mine={isMine(msg)}
+					data-mid={msg.id}
+					oncontextmenu={(e) => openMenu(e, msg)}
+				>
 					<div class="bubble" class:bubble-mine={isMine(msg)}>
 						{#if showSenderTag(msg, i)}
 							<span class="bubble-sender" style="color: {getAvatarColor(senderName(msg))}">
@@ -290,31 +381,57 @@
 						<span class="bubble-time">
 							{#if msg.edited_at}<span class="edited">edited</span>{/if}
 							{formatTime(msg.created_at)}
-						</span>
-					</div>
-					<div class="msg-actions">
-						<button
-							class="action-trigger"
-							onclick={(e) => {
-								e.stopPropagation();
-								toggleMenu(msg.id);
-							}}
-							title="Message actions"
-							aria-label="Message actions"
-						>
-							<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-								<circle cx="5" cy="12" r="1.6" />
-								<circle cx="12" cy="12" r="1.6" />
-								<circle cx="19" cy="12" r="1.6" />
-							</svg>
-						</button>
-						{#if menuFor === msg.id}
-							<div class="action-menu">
-								<button onclick={() => doReply(msg)}>Reply</button>
-								{#if isMine(msg)}
-									<button onclick={() => doEdit(msg)}>Edit</button>
-									<button class="danger" onclick={() => doDelete(msg)}>Delete</button>
+							{#if msgStatus(msg)}
+								{@const st = msgStatus(msg)}
+								{#if st === 'sent'}
+									<svg class="tick" viewBox="0 0 16 12" fill="none" aria-label="Sent">
+										<path
+											d="M2 6.5 5.5 10 12 2.5"
+											stroke="currentColor"
+											stroke-width="1.6"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+										/>
+									</svg>
+								{:else}
+									<svg
+										class="tick"
+										class:read={st === 'read'}
+										viewBox="0 0 20 12"
+										fill="none"
+										aria-label={st === 'read' ? 'Read' : 'Delivered'}
+									>
+										<path
+											d="M2 6.5 5.5 10 12 2.5"
+											stroke="currentColor"
+											stroke-width="1.6"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+										/>
+										<path
+											d="M8 6.5 11.5 10 18 2.5"
+											stroke="currentColor"
+											stroke-width="1.6"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+										/>
+									</svg>
 								{/if}
+							{/if}
+						</span>
+						{#if msg.reactions && msg.reactions.length > 0}
+							<div class="reactions">
+								{#each msg.reactions as r (r.emoji)}
+									<button
+										class="reaction-chip"
+										class:reacted={iReacted(r)}
+										onclick={() => chat.toggleReaction(msg, r.emoji)}
+										title={`${r.count} reacted`}
+									>
+										<span class="reaction-emoji">{r.emoji}</span>
+										<span class="reaction-count">{r.count}</span>
+									</button>
+								{/each}
 							</div>
 						{/if}
 					</div>
@@ -326,6 +443,35 @@
 
 {#if viewerIndex !== null}
 	<MediaViewer items={mediaItems} index={viewerIndex} onclose={() => (viewerIndex = null)} />
+{/if}
+
+{#if menu}
+	{@const m = menu}
+	<div
+		class="action-menu"
+		bind:this={menuEl}
+		style="left: {menuPos?.x ?? m.x}px; top: {menuPos?.y ?? m.y}px; visibility: {menuPos
+			? 'visible'
+			: 'hidden'};"
+	>
+		<div class="reaction-picker">
+			{#each QUICK_REACTIONS as emoji (emoji)}
+				<button
+					class="reaction-option"
+					class:active={reactedWith(m.msg, emoji)}
+					onclick={() => doReact(m.msg, emoji)}
+					aria-label={`React ${emoji}`}
+				>
+					{emoji}
+				</button>
+			{/each}
+		</div>
+		<button onclick={() => doReply(m.msg)}>Reply</button>
+		{#if isMine(m.msg)}
+			<button onclick={() => doEdit(m.msg)}>Edit</button>
+			<button class="danger" onclick={() => doDelete(m.msg)}>Delete</button>
+		{/if}
+	</div>
 {/if}
 
 <Dialog
@@ -392,53 +538,16 @@
 	.message-row {
 		display: flex;
 		justify-content: flex-start;
-		align-items: center;
-		gap: 4px;
 	}
 
 	.message-row.mine {
 		justify-content: flex-end;
 	}
 
-	/* Per-message action trigger + dropdown menu. */
-	.msg-actions {
-		position: relative;
-		flex-shrink: 0;
-	}
-
-	.mine .msg-actions {
-		order: -1; /* actions on the left of own (right-aligned) bubbles */
-	}
-
-	.action-trigger {
-		opacity: 0;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 26px;
-		height: 26px;
-		padding: 0;
-		border: none;
-		border-radius: 50%;
-		background: transparent;
-		color: rgba(0, 0, 0, 0.4);
-		cursor: pointer;
-	}
-
-	.message-row:hover .action-trigger {
-		opacity: 1;
-	}
-
-	.action-trigger:hover {
-		background: rgba(0, 0, 0, 0.08);
-		color: #1f1f1f;
-	}
-
+	/* Right-click action menu — fixed to the viewport, positioned at the cursor. */
 	.action-menu {
-		position: absolute;
-		top: 100%;
-		left: 0;
-		z-index: 20;
+		position: fixed;
+		z-index: 1000;
 		min-width: 120px;
 		padding: 4px;
 		display: flex;
@@ -447,11 +556,6 @@
 		border: 1px solid rgba(0, 0, 0, 0.1);
 		border-radius: 10px;
 		box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
-	}
-
-	.mine .action-menu {
-		left: auto;
-		right: 0;
 	}
 
 	.action-menu button {
@@ -475,6 +579,92 @@
 
 	.action-menu button.danger:hover {
 		background: rgba(209, 52, 56, 0.1);
+	}
+
+	/* Emoji picker row at the top of the action menu. */
+	.reaction-picker {
+		display: flex;
+		gap: 2px;
+		padding: 2px 2px 6px;
+		margin-bottom: 4px;
+		border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+	}
+
+	.reaction-option {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 30px;
+		height: 30px;
+		padding: 0;
+		border: none;
+		border-radius: 8px;
+		background: transparent;
+		font-size: 17px;
+		line-height: 1;
+		cursor: pointer;
+	}
+
+	.reaction-option:hover {
+		background: rgba(0, 0, 0, 0.08);
+	}
+
+	.reaction-option.active {
+		background: rgba(62, 180, 137, 0.18);
+	}
+
+	/* Reaction chips under a bubble. */
+	.reactions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px;
+		margin-top: 4px;
+	}
+
+	.reaction-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+		padding: 1px 7px;
+		border: 1px solid transparent;
+		border-radius: 11px;
+		background: rgba(0, 0, 0, 0.06);
+		font-size: 12px;
+		line-height: 18px;
+		color: inherit;
+		cursor: pointer;
+	}
+
+	.reaction-chip .reaction-count {
+		font-size: 11px;
+		color: rgba(0, 0, 0, 0.55);
+	}
+
+	.reaction-chip.reacted {
+		background: rgba(62, 180, 137, 0.16);
+		border-color: var(--fluent-accent-primary, #3eb489);
+	}
+
+	.reaction-chip.reacted .reaction-count {
+		color: var(--fluent-accent-primary, #3eb489);
+	}
+
+	/* On own (green) bubbles the chips need lighter contrast. */
+	.bubble-mine .reaction-chip {
+		background: rgba(255, 255, 255, 0.2);
+	}
+
+	.bubble-mine .reaction-chip .reaction-count {
+		color: rgba(255, 255, 255, 0.85);
+	}
+
+	.bubble-mine .reaction-chip.reacted {
+		background: rgba(255, 255, 255, 0.35);
+		border-color: #ffffff;
+	}
+
+	.bubble-mine .reaction-chip.reacted .reaction-count {
+		color: #ffffff;
 	}
 
 	/* Reply quote inside a bubble. */
@@ -759,10 +949,25 @@
 		font-size: 10px;
 		color: rgba(0, 0, 0, 0.4);
 		align-self: flex-end;
+		display: inline-flex;
+		align-items: center;
+		gap: 2px;
 	}
 
 	.bubble-mine .bubble-time {
 		color: rgba(255, 255, 255, 0.65);
+	}
+
+	/* Delivery/read ticks — only shown on my own (green) bubbles. */
+	.tick {
+		width: 15px;
+		height: 11px;
+		flex-shrink: 0;
+		color: inherit;
+	}
+
+	.tick.read {
+		color: #ffffff;
 	}
 
 	@media (prefers-color-scheme: dark) {
@@ -807,13 +1012,6 @@
 		.att-file-dl {
 			color: rgba(255, 255, 255, 0.4);
 		}
-		.action-trigger {
-			color: rgba(255, 255, 255, 0.45);
-		}
-		.action-trigger:hover {
-			background: rgba(255, 255, 255, 0.1);
-			color: #ffffff;
-		}
 		.action-menu {
 			background: #2e2e3a;
 			border-color: rgba(255, 255, 255, 0.1);
@@ -830,6 +1028,21 @@
 		}
 		.action-menu button.danger:hover {
 			background: rgba(255, 138, 144, 0.12);
+		}
+		.reaction-picker {
+			border-bottom-color: rgba(255, 255, 255, 0.1);
+		}
+		.reaction-option:hover {
+			background: rgba(255, 255, 255, 0.1);
+		}
+		.reaction-chip {
+			background: rgba(255, 255, 255, 0.08);
+		}
+		.reaction-chip .reaction-count {
+			color: rgba(255, 255, 255, 0.55);
+		}
+		.reaction-chip.reacted {
+			background: rgba(62, 180, 137, 0.24);
 		}
 		.reply-quote {
 			background: rgba(255, 255, 255, 0.06);

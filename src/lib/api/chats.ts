@@ -17,6 +17,12 @@ export interface ReplyPreview {
 	text: string;
 }
 
+export interface Reaction {
+	emoji: string;
+	count: number;
+	user_ids: number[];
+}
+
 export interface Message {
 	id: number;
 	sender_id: number;
@@ -27,6 +33,7 @@ export interface Message {
 	reply_to_id?: number;
 	edited_at?: string;
 	reply_preview?: ReplyPreview;
+	reactions?: Reaction[];
 }
 
 export interface ChatMember {
@@ -35,6 +42,14 @@ export interface ChatMember {
 	display_name: string;
 	email: string;
 	created_at: string;
+	online?: boolean;
+	last_seen?: string;
+}
+
+export interface MemberStatus {
+	user_id: number;
+	last_read: number;
+	last_delivered: number;
 }
 
 export interface ChatDetail {
@@ -43,6 +58,8 @@ export interface ChatDetail {
 	type: 'direct' | 'group';
 	members: ChatMember[];
 	last_messages: Message[];
+	unread_count: number;
+	member_status: MemberStatus[];
 }
 
 export async function getChats(): Promise<ChatDetail[]> {
@@ -64,4 +81,13 @@ export async function createChat(
 	if (!res.ok) throw new Error('Failed to create chat');
 	const data = await res.json();
 	return data.chat_id;
+}
+
+export async function markChatRead(chatId: number, messageId: number): Promise<void> {
+	const res = await authFetch(`/api/chats/${chatId}/read`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ message_id: messageId })
+	});
+	if (!res.ok) throw new Error('Failed to mark chat read');
 }

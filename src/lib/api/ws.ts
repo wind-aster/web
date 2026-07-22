@@ -1,16 +1,30 @@
-import type { Message } from './chats';
+import type { Message, Reaction } from './chats';
 
 export interface WSHandlers {
 	onMessage: (msg: Message) => void;
 	onMessageUpdated: (msg: Message) => void;
 	onMessageDeleted: (chatId: number, messageId: number) => void;
+	onMessageReaction: (chatId: number, messageId: number, reactions: Reaction[]) => void;
+	onReadStatus: (chatId: number, userId: number, lastRead: number, lastDelivered: number) => void;
+	onPresence: (userId: number, online: boolean, lastSeen?: string) => void;
+	onTyping: (chatId: number, userId: number, typing: boolean) => void;
 }
 
 // Typed envelope pushed by the server. Every realtime frame carries a `type`.
 type WSEvent =
 	| { type: 'message'; message: Message }
 	| { type: 'message_updated'; message: Message }
-	| { type: 'message_deleted'; chat_id: number; message_id: number };
+	| { type: 'message_deleted'; chat_id: number; message_id: number }
+	| { type: 'message_reaction'; chat_id: number; message_id: number; reactions: Reaction[] }
+	| {
+			type: 'read_status';
+			chat_id: number;
+			user_id: number;
+			last_read: number;
+			last_delivered: number;
+	  }
+	| { type: 'presence'; user_id: number; online: boolean; last_seen?: string }
+	| { type: 'typing'; chat_id: number; user_id: number; typing: boolean };
 
 const WS_BASE = import.meta.env.VITE_API_URL
 	? import.meta.env.VITE_API_URL.replace(/^http/, 'ws')
@@ -72,6 +86,18 @@ async function open(): Promise<void> {
 				case 'message_deleted':
 					handlers?.onMessageDeleted(ev.chat_id, ev.message_id);
 					break;
+				case 'message_reaction':
+					handlers?.onMessageReaction(ev.chat_id, ev.message_id, ev.reactions);
+					break;
+				case 'read_status':
+					handlers?.onReadStatus(ev.chat_id, ev.user_id, ev.last_read, ev.last_delivered);
+					break;
+				case 'presence':
+					handlers?.onPresence(ev.user_id, ev.online, ev.last_seen);
+					break;
+				case 'typing':
+					handlers?.onTyping(ev.chat_id, ev.user_id, ev.typing);
+					break;
 			}
 		} catch {
 			// ignore malformed frames
@@ -111,6 +137,12 @@ export function sendWS(
 			reply_to_id: replyToId ?? null
 		})
 	);
+	return true;
+}
+
+export function sendTypingWS(chatId: number, typing: boolean): boolean {
+	if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+	socket.send(JSON.stringify({ type: 'typing', chat_id: chatId, typing }));
 	return true;
 }
 

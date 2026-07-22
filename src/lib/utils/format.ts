@@ -39,6 +39,25 @@ export function formatDaySeparator(dateStr: string): string {
 	});
 }
 
+/** Relative "last seen" label, e.g. "last seen 5m ago". */
+export function formatLastSeen(dateStr?: string): string {
+	if (!dateStr) return 'offline';
+	const then = new Date(dateStr).getTime();
+	if (Number.isNaN(then)) return 'offline';
+	const secs = Math.max(0, Math.floor((Date.now() - then) / 1000));
+	if (secs < 60) return 'last seen just now';
+	const mins = Math.floor(secs / 60);
+	if (mins < 60) return `last seen ${mins}m ago`;
+	const hours = Math.floor(mins / 60);
+	if (hours < 24) return `last seen ${hours}h ago`;
+	const d = new Date(then);
+	const now = new Date();
+	const yesterday = new Date(now);
+	yesterday.setDate(now.getDate() - 1);
+	if (sameDay(dateStr, yesterday.toISOString())) return 'last seen yesterday';
+	return `last seen ${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
+}
+
 /** Human-readable byte size, e.g. 2.4 MB. */
 export function formatBytes(bytes: number): string {
 	if (!bytes || bytes < 0) return '0 B';

@@ -1,5 +1,5 @@
 import { authFetch } from './client';
-import type { Message, Attachment, ReplyPreview } from './chats';
+import type { Message, Attachment, ReplyPreview, Reaction } from './chats';
 export type { Message };
 
 export async function getMessages(chatId: number, limit = 50, before?: number): Promise<Message[]> {
@@ -48,4 +48,17 @@ export async function editMessage(id: number, text: string): Promise<Message> {
 export async function deleteMessage(id: number): Promise<void> {
 	const res = await authFetch(`/api/messages/${id}`, { method: 'DELETE' });
 	if (!res.ok) throw new Error('Failed to delete message');
+}
+
+export async function toggleReaction(
+	id: number,
+	emoji: string
+): Promise<{ reactions: Reaction[] }> {
+	const res = await authFetch(`/api/messages/${id}/reactions`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ emoji })
+	});
+	if (!res.ok) throw new Error('Failed to toggle reaction');
+	return res.json();
 }

@@ -176,6 +176,7 @@
 			inputText = '';
 			clearPending();
 			chat.cancelReply();
+			chat.stopTyping();
 		}
 	}
 
@@ -195,6 +196,9 @@
 		} else if (e.key === 'Escape') {
 			if (isEditing) chat.cancelEdit();
 			else if (chat.replyingTo) chat.cancelReply();
+		} else if (!isEditing && e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+			// A printable character — signal that we're typing (throttled in the store).
+			chat.notifyTyping();
 		}
 	}
 </script>

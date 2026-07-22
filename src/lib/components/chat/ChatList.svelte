@@ -1,7 +1,16 @@
 <script lang="ts">
 	import { chat } from '$lib/stores/chat.svelte';
+	import { auth } from '$lib/stores/auth.svelte';
 	import { chatPreview, chatTime } from '$lib/utils/format';
+	import type { ChatDetail } from '$lib/api/chats';
 	import Avatar from './Avatar.svelte';
+
+	// Online status of the other participant in a DM (undefined for groups).
+	function dmOnline(c: ChatDetail): boolean {
+		if (c.type !== 'direct') return false;
+		const other = c.members.find((m) => m.id !== auth.userId);
+		return other ? chat.presenceFor(other.id).online : false;
+	}
 </script>
 
 <div class="chat-list">
@@ -15,13 +24,18 @@
 				class:active={c.id === chat.selectedChatId}
 				onclick={() => chat.selectChat(c.id)}
 			>
-				<Avatar {name} size={40} />
+				<Avatar {name} size={40} online={dmOnline(c)} />
 				<div class="chat-info">
 					<div class="chat-item-row">
 						<span class="chat-name">{name}</span>
 						<span class="chat-time">{chatTime(c)}</span>
 					</div>
-					<span class="chat-preview">{chatPreview(c)}</span>
+					<div class="chat-item-row">
+						<span class="chat-preview">{chatPreview(c)}</span>
+						{#if c.id !== chat.selectedChatId && c.unread_count > 0}
+							<span class="unread-badge">{c.unread_count > 99 ? '99+' : c.unread_count}</span>
+						{/if}
+					</div>
 				</div>
 			</button>
 		{/each}
@@ -97,11 +111,30 @@
 	}
 
 	.chat-preview {
+		flex: 1;
+		min-width: 0;
 		font-size: 12px;
 		color: rgba(0, 0, 0, 0.5);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	.unread-badge {
+		flex-shrink: 0;
+		min-width: 18px;
+		height: 18px;
+		padding: 0 5px;
+		box-sizing: border-box;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		border-radius: 9px;
+		background: var(--fluent-accent-primary, #3eb489);
+		color: #ffffff;
+		font-size: 11px;
+		font-weight: 600;
+		line-height: 1;
 	}
 
 	@media (prefers-color-scheme: dark) {
