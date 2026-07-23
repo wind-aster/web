@@ -4,6 +4,7 @@
 	import { auth } from '$lib/stores/auth.svelte';
 	import { logout as apiLogout } from '$lib/api/auth';
 	import { chat } from '$lib/stores/chat.svelte';
+	import { notifications } from '$lib/stores/notifications.svelte';
 	import Sidebar from '$lib/components/chat/Sidebar.svelte';
 	import ChatHeader from '$lib/components/chat/ChatHeader.svelte';
 	import MessageThread from '$lib/components/chat/MessageThread.svelte';
@@ -19,6 +20,20 @@
 		if (!token) return;
 		chat.start();
 		return () => chat.stop();
+	});
+
+	// Ask for notification permission on first load (once), and arm the gesture
+	// listener that unlocks the ping audio after an auto-grant.
+	$effect(() => {
+		if (!auth.isAuthenticated) return;
+		notifications.armAudioUnlock();
+		notifications.autoRequest();
+	});
+
+	// Reflect total unread in the tab title so a backgrounded tab shows activity.
+	$effect(() => {
+		notifications.setDocumentTitle(chat.totalUnread);
+		return () => notifications.setDocumentTitle(0);
 	});
 
 	function handleLogout() {

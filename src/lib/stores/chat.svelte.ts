@@ -17,8 +17,9 @@ import {
 } from '$lib/api/messages';
 import type { Reaction } from '$lib/api/chats';
 import { getUsers } from '$lib/api/users';
-import { connectWS, sendWS, sendTypingWS, disconnectWS } from '$lib/api/ws';
+import { connectWS, sendWS, sendTypingWS, disconnectWS, type ReactionMeta } from '$lib/api/ws';
 import { ensureFreshAccess } from '$lib/api/client';
+import { notifications } from '$lib/stores/notifications.svelte';
 
 function lastActivity(chat: ChatDetail): number {
 	const last = chat.last_messages.at(-1);
@@ -411,11 +412,46 @@ function createChatStore() {
 		return chat.title;
 	}
 
+	// Short preview of a message for notifications (text, else an attachment hint).
+	function messagePreview(msg: Message): string {
+		if (msg.text && msg.text.trim()) return msg.text;
+		if (msg.attachments && msg.attachments.length > 0) return '📎 Attachment';
+		return '';
+	}
+
+	function senderName(chat: ChatDetail, senderId: number): string {
+		const m = chat.members.find((mm) => mm.id === senderId);
+		return m?.display_name || m?.username || 'Someone';
+	}
+
+	// Fire a desktop notification/ping for an incoming message from someone else
+	// (gating on window focus/visibility happens inside notifications.notify).
+	function notifyMessage(chat: ChatDetail, msg: Message) {
+		if (msg.sender_id === auth.userId || msg.sender_id === SYSTEM_USER_ID) return;
+		const preview = messagePreview(msg);
+		if (chat.type === 'direct') {
+			notifications.notify({
+				title: senderName(chat, msg.sender_id),
+				body: preview,
+				tag: `chat-${chat.id}`,
+				chatId: chat.id
+			});
+		} else {
+			notifications.notify({
+				title: chatName(chat),
+				body: `${senderName(chat, msg.sender_id)}: ${preview}`,
+				tag: `chat-${chat.id}`,
+				chatId: chat.id
+			});
+		}
+	}
+
 	function onMessage(msg: Message) {
 		if (msg.chat_id === selectedChatId) {
 			messages = [...messages, msg];
 		}
-		if (chats.some((c) => c.id === msg.chat_id)) {
+		const existing = chats.find((c) => c.id === msg.chat_id);
+		if (existing) {
 			// The open chat never accrues a badge (its messages are on screen); only
 			// other chats, and only for others' non-system messages.
 			const bumpUnread =
@@ -431,6 +467,7 @@ function createChatStore() {
 						}
 					: c
 			);
+			notifyMessage(existing, msg);
 		} else {
 			// Message for a chat we aren't tracking yet (new DM/group) — pull it in.
 			refreshChats();
@@ -475,8 +512,25 @@ function createChatStore() {
 		applyDeletedMessage(chatId, id);
 	}
 
-	function onMessageReaction(chatId: number, id: number, reactions: Reaction[]) {
+	function onMessageReaction(
+		chatId: number,
+		id: number,
+		reactions: Reaction[],
+		meta: ReactionMeta
+	) {
 		applyReactions(chatId, id, reactions);
+		// Notify only when someone else adds a reaction to one of my messages.
+		if (meta.added && meta.actorId !== auth.userId && meta.senderId === auth.userId) {
+			const c = chats.find((x) => x.id === chatId);
+			if (c) {
+				notifications.notify({
+					title: chatName(c),
+					body: `${senderName(c, meta.actorId)} reacted ${meta.emoji} to your message`,
+					tag: `react-${id}`,
+					chatId
+				});
+			}
+		}
 	}
 
 	function onReconnected() {
@@ -494,6 +548,8 @@ function createChatStore() {
 	}
 
 	function start() {
+		// Let a clicked desktop notification jump straight to the conversation.
+		notifications.setOpenChat(selectChat);
 		getChats().then((data) => {
 			chats = data ?? [];
 			seedPresence(chats);
@@ -523,6 +579,9 @@ function createChatStore() {
 		},
 		get sortedChats() {
 			return sortedChats;
+		},
+		get totalUnread() {
+			return chats.reduce((n, c) => n + (c.unread_count || 0), 0);
 		},
 		get selectedChat() {
 			return selectedChat;

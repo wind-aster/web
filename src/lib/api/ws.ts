@@ -1,10 +1,22 @@
 import type { Message, Reaction } from './chats';
 
+export interface ReactionMeta {
+	senderId: number;
+	actorId: number;
+	added: boolean;
+	emoji: string;
+}
+
 export interface WSHandlers {
 	onMessage: (msg: Message) => void;
 	onMessageUpdated: (msg: Message) => void;
 	onMessageDeleted: (chatId: number, messageId: number) => void;
-	onMessageReaction: (chatId: number, messageId: number, reactions: Reaction[]) => void;
+	onMessageReaction: (
+		chatId: number,
+		messageId: number,
+		reactions: Reaction[],
+		meta: ReactionMeta
+	) => void;
 	onReadStatus: (chatId: number, userId: number, lastRead: number, lastDelivered: number) => void;
 	onPresence: (userId: number, online: boolean, lastSeen?: string) => void;
 	onTyping: (chatId: number, userId: number, typing: boolean) => void;
@@ -15,7 +27,16 @@ type WSEvent =
 	| { type: 'message'; message: Message }
 	| { type: 'message_updated'; message: Message }
 	| { type: 'message_deleted'; chat_id: number; message_id: number }
-	| { type: 'message_reaction'; chat_id: number; message_id: number; reactions: Reaction[] }
+	| {
+			type: 'message_reaction';
+			chat_id: number;
+			message_id: number;
+			reactions: Reaction[];
+			sender_id: number;
+			actor_id: number;
+			added: boolean;
+			emoji: string;
+	  }
 	| {
 			type: 'read_status';
 			chat_id: number;
@@ -87,7 +108,12 @@ async function open(): Promise<void> {
 					handlers?.onMessageDeleted(ev.chat_id, ev.message_id);
 					break;
 				case 'message_reaction':
-					handlers?.onMessageReaction(ev.chat_id, ev.message_id, ev.reactions);
+					handlers?.onMessageReaction(ev.chat_id, ev.message_id, ev.reactions, {
+						senderId: ev.sender_id,
+						actorId: ev.actor_id,
+						added: ev.added,
+						emoji: ev.emoji
+					});
 					break;
 				case 'read_status':
 					handlers?.onReadStatus(ev.chat_id, ev.user_id, ev.last_read, ev.last_delivered);

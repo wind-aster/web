@@ -8,7 +8,9 @@ export default defineConfig({
 		host: true,
 		proxy: {
 			'/api': {
-				target: 'http://localhost:8080',
+				// IPv4 loopback (not `localhost`) so the WS upgrade never resolves to
+				// `::1` first and hang — avoids `ws proxy error ETIMEDOUT`.
+				target: 'http://127.0.0.1:8080',
 				ws: true
 			}
 		}

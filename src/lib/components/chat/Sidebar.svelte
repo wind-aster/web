@@ -4,6 +4,7 @@
 	import Avatar from './Avatar.svelte';
 	import ChatList from './ChatList.svelte';
 	import NewChatPanel from './NewChatPanel.svelte';
+	import NotificationBell from './NotificationBell.svelte';
 
 	let { onLogout }: { onLogout: () => void } = $props();
 </script>
@@ -12,13 +13,31 @@
 	<div class="sidebar-top">
 		<span class="logo">WindAster</span>
 		<div class="top-actions">
+			<NotificationBell />
 			<button class="icon-btn" onclick={() => chat.openDM()} title="New chat">
-				<svg width="18" height="18" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-					<path d="M8 3.5v9M3.5 8h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+				<svg
+					width="18"
+					height="18"
+					viewBox="0 0 16 16"
+					fill="none"
+					xmlns="http://www.w3.org/2000/svg"
+				>
+					<path
+						d="M8 3.5v9M3.5 8h9"
+						stroke="currentColor"
+						stroke-width="1.5"
+						stroke-linecap="round"
+					/>
 				</svg>
 			</button>
 			<button class="icon-btn" onclick={() => chat.openGroup()} title="New group">
-				<svg width="18" height="18" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+				<svg
+					width="18"
+					height="18"
+					viewBox="0 0 16 16"
+					fill="none"
+					xmlns="http://www.w3.org/2000/svg"
+				>
 					<path
 						d="M10.5 8a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5ZM13.5 13v-.5a2.5 2.5 0 0 0-2.5-2.5h-1M5.5 8.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM2 13.5V13a2.5 2.5 0 0 1 2.5-2.5h2A2.5 2.5 0 0 1 9 13v.5"
 						stroke="currentColor"
@@ -29,7 +48,13 @@
 				</svg>
 			</button>
 			<button class="icon-btn" onclick={onLogout} title="Sign out">
-				<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+				<svg
+					width="16"
+					height="16"
+					viewBox="0 0 16 16"
+					fill="none"
+					xmlns="http://www.w3.org/2000/svg"
+				>
 					<path
 						d="M6 2H3a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3M10 11l3-3-3-3M13 8H6"
 						stroke="currentColor"
@@ -96,7 +121,9 @@
 		border-radius: 6px;
 		cursor: pointer;
 		color: rgba(0, 0, 0, 0.45);
-		transition: background 0.15s, color 0.15s;
+		transition:
+			background 0.15s,
+			color 0.15s;
 		padding: 0;
 	}
 
