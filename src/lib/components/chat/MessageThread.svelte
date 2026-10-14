@@ -299,6 +299,7 @@
 													src={attThumb(att) ?? attUrl(att)}
 													alt={att.filename}
 													loading="lazy"
+													decoding="async"
 													onerror={() => refreshUrl(att.id)}
 												/>
 											</button>
@@ -311,6 +312,10 @@
 											src={attThumb(att) ?? attUrl(att)}
 											alt={att.filename}
 											loading="lazy"
+											decoding="async"
+											style={att.width && att.height
+												? `aspect-ratio: ${att.width}/${att.height}`
+												: undefined}
 											onerror={() => refreshUrl(att.id)}
 										/>
 									</button>
@@ -323,6 +328,7 @@
 													src={attThumb(att)}
 													alt={att.filename}
 													loading="lazy"
+													decoding="async"
 													onerror={() => refreshUrl(att.id)}
 												/>
 											{/if}
